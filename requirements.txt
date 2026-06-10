@@ -1,0 +1,2 @@
+# Local dependency. Install on the Mac that runs Titan's real ML stack.
+-e ../titan-chordpro-lib[mac]
