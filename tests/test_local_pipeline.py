@@ -135,6 +135,30 @@ class LocalPipelineTest(unittest.TestCase):
         self.assertEqual(events, ["decode", "align"])
         self.assertEqual(transcript.words[0].text, "Raw")
 
+    def test_pipeline_returns_raw_cache_without_running_separation_when_alignment_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audio = root / "song.mp3"
+            audio.write_bytes(b"audio")
+            audio_id = audio_sha256(audio)
+            config = LocalPipelineConfig(cache_root=root / ".cache", alignment="none")
+            raw_variant = cache_key(config.cache_identity(stage="raw"))
+            raw = Transcript(
+                words=[TranscribedWord("Raw", 1.0, 1.2, source="whisper")],
+                detected_language="pt",
+                duration_seconds=2.0,
+            )
+            save_json(cache_path(config.cache_root, audio_id, "transcript", raw_variant), raw.to_dict())
+
+            transcript = transcribe_audio_local(
+                audio,
+                config=config,
+                separate_vocals_fn=lambda *args, **kwargs: self.fail("separation should not run"),
+                decode_fn=lambda *args, **kwargs: self.fail("decode should not run"),
+            )
+
+        self.assertEqual(transcript.words[0].text, "Raw")
+
     def test_cache_variant_changes_with_whisper_model(self) -> None:
         medium = LocalPipelineConfig(whisper_model="medium")
         large = LocalPipelineConfig(whisper_model="large-v3")

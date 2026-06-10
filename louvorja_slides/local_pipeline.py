@@ -67,6 +67,11 @@ def transcribe_audio_local(
         if cached_aligned is not None:
             return Transcript.from_dict(cached_aligned)
 
+    raw_cache = _cache_file(config, audio_id, "raw")
+    cached_raw = load_json(raw_cache)
+    if cached_raw is not None and config.alignment == "none":
+        return Transcript.from_dict(cached_raw)
+
     selected_audio = audio_path
     if config.vocal_separation != "none":
         selected_audio = separate_vocals_fn(
@@ -75,11 +80,6 @@ def transcribe_audio_local(
             cache_root=config.cache_root,
             model_filename=config.separator_model,
         )
-
-    raw_cache = _cache_file(config, audio_id, "raw")
-    cached_raw = load_json(raw_cache)
-    if cached_raw is not None and config.alignment == "none":
-        return Transcript.from_dict(cached_raw)
 
     decoded = decode_fn(selected_audio)
     if cached_raw is not None:

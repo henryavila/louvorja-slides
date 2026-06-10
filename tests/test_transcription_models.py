@@ -87,6 +87,26 @@ class LocalWhisperTest(unittest.TestCase):
 
         self.assertEqual([word.text for word in transcript.words], ["Santo"])
 
+    def test_transcriber_splits_multi_word_segments_with_distributed_timing(self) -> None:
+        class FakeModel:
+            def transcribe(self, samples: np.ndarray, **kwargs: object) -> list[SimpleNamespace]:
+                return [SimpleNamespace(t0=100, t1=200, text="Fala comigo")]
+
+        transcriber = LocalWhisperTranscriber(model=FakeModel(), model_id="large-v3")
+
+        transcript = transcriber.transcribe_samples(
+            samples=np.zeros(16000, dtype=np.float32),
+            sample_rate=16000,
+            duration_seconds=3.0,
+            language="pt",
+        )
+
+        self.assertEqual([word.text for word in transcript.words], ["Fala", "comigo"])
+        self.assertEqual(transcript.words[0].start, 1.0)
+        self.assertEqual(transcript.words[0].end, 1.5)
+        self.assertEqual(transcript.words[1].start, 1.5)
+        self.assertEqual(transcript.words[1].end, 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from louvorja_slides.cache import cache_key
 from louvorja_slides.separation import SeparationUnavailableError, separate_vocals
 
 
@@ -11,7 +12,8 @@ class SeparationTest(unittest.TestCase):
     def test_separate_vocals_returns_existing_cached_vocal_stem(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            cached = root / "abc123" / "vocals.wav"
+            variant = cache_key({"model_filename": "htdemucs_ft.yaml", "schema_version": 1})
+            cached = root / "abc123" / "separation" / variant / "vocals.wav"
             cached.parent.mkdir(parents=True)
             cached.write_bytes(b"wav")
             audio = root / "song.mp3"
@@ -20,6 +22,45 @@ class SeparationTest(unittest.TestCase):
             result = separate_vocals(audio, audio_id="abc123", cache_root=root)
 
         self.assertEqual(result, cached)
+
+    def test_separate_vocals_cache_is_scoped_by_model_filename(self) -> None:
+        calls = []
+
+        class FakeSeparator:
+            def __init__(self, output_dir: str, output_format: str, log_level: int) -> None:
+                self.output_dir = Path(output_dir)
+
+            def load_model(self, model_filename: str) -> None:
+                calls.append(model_filename)
+
+            def separate(self, audio_file_path: str) -> list[str]:
+                output = self.output_dir / f"song_(Vocals)_{len(calls)}.wav"
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"vocals")
+                return [str(output)]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audio = root / "song.mp3"
+            audio.write_bytes(b"audio")
+
+            first = separate_vocals(
+                audio,
+                audio_id="abc123",
+                cache_root=root,
+                model_filename="htdemucs_ft.yaml",
+                separator_factory=FakeSeparator,
+            )
+            second = separate_vocals(
+                audio,
+                audio_id="abc123",
+                cache_root=root,
+                model_filename="other-model.yaml",
+                separator_factory=FakeSeparator,
+            )
+
+        self.assertNotEqual(first, second)
+        self.assertEqual(calls, ["htdemucs_ft.yaml", "other-model.yaml"])
 
     def test_separate_vocals_fails_clearly_when_dependency_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

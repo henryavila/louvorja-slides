@@ -138,14 +138,7 @@ class LocalWhisperTranscriber:
             end = float(getattr(segment, "t1", getattr(segment, "t0", 0.0))) / 100.0
             if end < start:
                 end = start
-            words.append(
-                TranscribedWord(
-                    text=text,
-                    start=start,
-                    end=end,
-                    source="whisper",
-                )
-            )
+            words.extend(_words_from_segment(text=text, start=start, end=end))
 
         if not words:
             raise ValueError(
@@ -160,3 +153,25 @@ class LocalWhisperTranscriber:
 
 def _clean_text(text: object) -> str:
     return " ".join(str(text).strip().split())
+
+
+def _words_from_segment(text: str, start: float, end: float) -> list[TranscribedWord]:
+    parts = text.split()
+    if len(parts) <= 1:
+        return [TranscribedWord(text=text, start=start, end=end, source="whisper")]
+
+    duration = max(0.0, end - start)
+    step = duration / len(parts) if duration else 0.0
+    result: list[TranscribedWord] = []
+    for index, part in enumerate(parts):
+        part_start = start + step * index
+        part_end = end if index == len(parts) - 1 else start + step * (index + 1)
+        result.append(
+            TranscribedWord(
+                text=part,
+                start=round(part_start, 6),
+                end=round(part_end, 6),
+                source="whisper",
+            )
+        )
+    return result

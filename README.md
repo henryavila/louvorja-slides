@@ -24,18 +24,25 @@ Use `--alignment none` only as an explicit local smoke-test bypass.
 
 ## Usage
 
-```bash
-python audio_to_slja.py song.mp3 --title "Song" --output song.slja
-python audio_to_slja.py video.mp4 --title "Song" --output song.slja
-```
-
-Explicit lower-quality smoke options while ML work is still in progress:
+Current runnable smoke path while MMS is deferred:
 
 ```bash
 python audio_to_slja.py song.mp3 --title "Song" --output song.slja \
   --vocal-separation none --alignment none --whisper-model medium
-python scripts/smoke_local_transcription.py local_audio/song.mp3 \
+python audio_to_slja.py video.mp4 --title "Song" --output song.slja \
   --vocal-separation none --alignment none --whisper-model medium
+```
+
+Intended quality-first command after the MMS backend lands:
+
+```bash
+python audio_to_slja.py song.mp3 --title "Song" --output song.slja
+```
+
+Transcript-only smoke script:
+
+```bash
+python scripts/smoke_local_transcription.py local_audio/song.mp3 --alignment none
 ```
 
 The generated `.slja` archive contains:

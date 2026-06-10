@@ -5,6 +5,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+from louvorja_slides.cache import cache_key
+
 
 class SeparationUnavailableError(RuntimeError):
     pass
@@ -26,7 +28,7 @@ def separate_vocals(
     separator_factory: SeparatorFactory | None = None,
 ) -> Path:
     audio_path = Path(audio_path)
-    cache_dir = Path(cache_root) / audio_id
+    cache_dir = Path(cache_root) / audio_id / "separation" / _separator_variant(model_filename)
     cached_vocals = cache_dir / "vocals.wav"
     if cached_vocals.exists():
         return cached_vocals
@@ -73,3 +75,7 @@ def _load_separator_factory() -> SeparatorFactory:
             "or run with --vocal-separation none"
         ) from exc
     return Separator
+
+
+def _separator_variant(model_filename: str) -> str:
+    return cache_key({"model_filename": model_filename, "schema_version": 1})
