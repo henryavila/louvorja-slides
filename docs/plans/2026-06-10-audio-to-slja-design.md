@@ -34,6 +34,11 @@ ZIP archive containing:
 
 - `slides.lja`
 - `audio\<original-audio-filename>`
+- `imagens\Capa.jpg`
+- `imagens\slides.jpg`
+
+The cover slide uses `imagens\Capa.jpg`. Every lyric slide uses
+`imagens\slides.jpg`, matching the reference `.slja`.
 
 ## LouvorJA Format Notes
 

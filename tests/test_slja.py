@@ -36,7 +36,7 @@ class SljaExporterTest(unittest.TestCase):
         self.assertEqual(format_timestamp(65.9), "00:01:05")
         self.assertEqual(format_timestamp(3661.2), "01:01:01")
 
-    def test_extract_lyric_slides_groups_lines_and_uses_first_word_time(self) -> None:
+    def test_extract_lyric_slides_uses_layout_rules_and_first_word_time(self) -> None:
         doc = SimpleNamespace(
             sections=[
                 SimpleNamespace(
@@ -54,14 +54,48 @@ class SljaExporterTest(unittest.TestCase):
         self.assertEqual(
             slides,
             [
-                Slide(lines=("Primeira linha", "Segunda linha"), start_seconds=8.7),
-                Slide(lines=("Terceira linha",), start_seconds=14.9),
+                Slide(
+                    lines=("Primeira linha", "Segunda linha Terceira linha"),
+                    start_seconds=8.7,
+                ),
+            ],
+        )
+
+    def test_extract_lyric_slides_collapses_repeated_lines_with_count_marker(self) -> None:
+        doc = SimpleNamespace(
+            sections=[
+                SimpleNamespace(
+                    lines=[
+                        _line("Fala comigo", 1.0),
+                        _line("Fala comigo", 7.0),
+                        _line("Fala comigo", 13.0),
+                    ]
+                )
+            ]
+        )
+
+        slides = extract_lyric_slides(doc)
+
+        self.assertEqual(
+            slides,
+            [
+                Slide(
+                    lines=("Fala comigo",),
+                    start_seconds=1.0,
+                    aux_text="(3x)",
+                ),
             ],
         )
 
     def test_render_lja_uses_louvorja_fields_cp1252_and_crlf(self) -> None:
         data = render_lja(
-            slides=[Slide(lines=("És tudo", "Não temas"), start_seconds=12.4)],
+            slides=[
+                Slide(
+                    lines=("És tudo", "Não temas"),
+                    start_seconds=12.4,
+                    aux_text="continua",
+                )
+            ],
             title="Canção teste",
             audio_name="song.mp3",
             version="25.0.test",
@@ -76,9 +110,13 @@ class SljaExporterTest(unittest.TestCase):
         self.assertIn("[Slide:1]\r\n", text)
         self.assertIn("tipo=CAPA\r\n", text)
         self.assertIn("letra=Canção teste\r\n", text)
+        self.assertIn("imagem=imagens\\Capa.jpg\r\n", text)
+        self.assertIn("imagem_posicao=5\r\n", text)
         self.assertIn("[Slide:2]\r\n", text)
         self.assertIn("tipo=LETRA\r\n", text)
         self.assertIn("letra=És tudo|Não temas\r\n", text)
+        self.assertIn("letra_aux=continua\r\n", text)
+        self.assertIn("imagem=imagens\\slides.jpg\r\n", text)
         self.assertIn("tempo=00:00:12\r\n", text)
         self.assertNotIn("\n[Geral]\n", text)
 
@@ -97,12 +135,24 @@ class SljaExporterTest(unittest.TestCase):
             )
 
             with zipfile.ZipFile(out_path) as archive:
-                self.assertEqual(set(archive.namelist()), {"slides.lja", "audio\\song.mp3"})
+                self.assertEqual(
+                    set(archive.namelist()),
+                    {
+                        "slides.lja",
+                        "audio\\song.mp3",
+                        "imagens\\Capa.jpg",
+                        "imagens\\slides.jpg",
+                    },
+                )
                 self.assertEqual(archive.read("audio\\song.mp3"), b"fake mp3 bytes")
+                self.assertGreater(len(archive.read("imagens\\Capa.jpg")), 1000)
+                self.assertGreater(len(archive.read("imagens\\slides.jpg")), 1000)
                 text = archive.read("slides.lja").decode("cp1252")
 
             self.assertIn("audio=audio\\song.mp3\r\n", text)
             self.assertIn("letra=Fala comigo\r\n", text)
+            self.assertIn("imagem=imagens\\Capa.jpg\r\n", text)
+            self.assertIn("imagem=imagens\\slides.jpg\r\n", text)
 
 
 if __name__ == "__main__":

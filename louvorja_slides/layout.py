@@ -1,0 +1,361 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Iterable
+
+
+@dataclass(frozen=True)
+class LayoutConfig:
+    target_max_chars_per_line: int = 28
+    hard_max_chars_per_line: int = 34
+    max_lines_per_slide: int = 2
+    min_slide_duration: float = 4.0
+    min_transition_gap: float = 3.0
+    phrase_pause_seconds: float = 0.60
+    auxiliary_max_chars: int = 28
+    allow_auxiliary: bool = True
+    weak_break_words: frozenset[str] = field(
+        default_factory=lambda: frozenset(
+            {
+                "a",
+                "o",
+                "as",
+                "os",
+                "um",
+                "uma",
+                "de",
+                "do",
+                "da",
+                "dos",
+                "das",
+                "em",
+                "no",
+                "na",
+                "nos",
+                "nas",
+                "e",
+                "que",
+                "nao",
+                "não",
+            }
+        )
+    )
+
+
+@dataclass(frozen=True)
+class LyricWord:
+    text: str
+    start: float
+    end: float
+
+
+@dataclass(frozen=True)
+class SlidePlan:
+    lines: tuple[str, ...]
+    start_seconds: float
+    end_seconds: float
+    aux_text: str = ""
+
+
+@dataclass(frozen=True)
+class _LayoutCandidate:
+    lines: tuple[str, ...]
+    aux_text: str
+    score: float
+
+
+def plan_lyric_slides(
+    words: Iterable[Any],
+    config: LayoutConfig | None = None,
+) -> list[SlidePlan]:
+    cfg = config or LayoutConfig()
+    lyric_words = [_coerce_word(word) for word in words]
+    lyric_words = [word for word in lyric_words if word.text]
+    if not lyric_words:
+        raise ValueError("no lyric words to layout")
+
+    slides: list[SlidePlan] = []
+    index = 0
+    while index < len(lyric_words):
+        strong_boundary = _first_strong_boundary(lyric_words, index, cfg)
+        if strong_boundary is not None:
+            candidate = _layout_segment(lyric_words[index : strong_boundary + 1], cfg)
+            if candidate is not None:
+                slides.append(_slide_from_candidate(lyric_words[index : strong_boundary + 1], candidate))
+                index = strong_boundary + 1
+                continue
+
+        end, candidate = _longest_layout(lyric_words, index, cfg)
+        segment = lyric_words[index : end + 1]
+        slides.append(_slide_from_candidate(segment, candidate))
+        index = end + 1
+
+    return collapse_repeated_slides(slides)
+
+
+def collapse_repeated_slides(slides: Iterable[SlidePlan]) -> list[SlidePlan]:
+    slide_list = list(slides)
+    collapsed: list[SlidePlan] = []
+    index = 0
+
+    while index < len(slide_list):
+        current = slide_list[index]
+        if current.aux_text:
+            collapsed.append(current)
+            index += 1
+            continue
+
+        repeat_count = 1
+        repeat_end_seconds = current.end_seconds
+        next_index = index + 1
+        while next_index < len(slide_list):
+            next_slide = slide_list[next_index]
+            if next_slide.aux_text or next_slide.lines != current.lines:
+                break
+            repeat_count += 1
+            repeat_end_seconds = next_slide.end_seconds
+            next_index += 1
+
+        if repeat_count == 1:
+            collapsed.append(current)
+        else:
+            collapsed.append(
+                SlidePlan(
+                    lines=current.lines,
+                    start_seconds=current.start_seconds,
+                    end_seconds=repeat_end_seconds,
+                    aux_text=f"({repeat_count}x)",
+                )
+            )
+        index = next_index
+
+    return collapsed
+
+
+def _coerce_word(word: Any) -> LyricWord:
+    if isinstance(word, LyricWord):
+        return word
+
+    text = getattr(word, "text", None)
+    timestamp = getattr(word, "timestamp", None)
+    if text is None or timestamp is None:
+        raise ValueError("word text and timestamp are required")
+
+    start = getattr(timestamp, "start", None)
+    end = getattr(timestamp, "end", None)
+    if start is None or end is None:
+        raise ValueError("word timestamp start/end are required")
+
+    return LyricWord(text=str(text).strip(), start=float(start), end=float(end))
+
+
+def _first_strong_boundary(
+    words: list[LyricWord],
+    start: int,
+    cfg: LayoutConfig,
+) -> int | None:
+    for index in range(start, len(words) - 1):
+        if words[index + 1].start - words[index].end >= cfg.min_transition_gap:
+            return index
+    return None
+
+
+def _longest_layout(
+    words: list[LyricWord],
+    start: int,
+    cfg: LayoutConfig,
+) -> tuple[int, _LayoutCandidate]:
+    best: tuple[int, _LayoutCandidate] | None = None
+    for end in range(start, len(words)):
+        candidate = _layout_segment(words[start : end + 1], cfg)
+        if candidate is not None:
+            if best is None or end > best[0] or candidate.score < best[1].score:
+                best = (end, candidate)
+
+    if best is not None:
+        return best
+
+    word = words[start]
+    return start, _LayoutCandidate(lines=(word.text,), aux_text="", score=0.0)
+
+
+def _layout_segment(words: list[LyricWord], cfg: LayoutConfig) -> _LayoutCandidate | None:
+    full_text = _join(words)
+    if len(words) == 1:
+        return _LayoutCandidate(lines=(full_text,), aux_text="", score=_line_score(words, cfg))
+
+    candidates: list[_LayoutCandidate] = []
+    if len(full_text) <= cfg.hard_max_chars_per_line:
+        candidates.append(
+            _LayoutCandidate(
+                lines=(full_text,),
+                aux_text="",
+                score=_length_over_target(len(full_text), cfg) - 12.0,
+            )
+        )
+
+    natural_splits = _natural_split_indices(words, cfg)
+    if cfg.max_lines_per_slide >= 2:
+        natural_split_set = set(natural_splits)
+
+        def add_two_line_candidates(split_indices: Iterable[int]) -> int:
+            added = 0
+            for split_index in split_indices:
+                first = words[: split_index + 1]
+                second = words[split_index + 1 :]
+                if not first or not second:
+                    continue
+                first_text = _join(first)
+                second_text = _join(second)
+                if len(first_text) > cfg.hard_max_chars_per_line:
+                    continue
+                if len(second_text) > cfg.hard_max_chars_per_line:
+                    continue
+                candidates.append(
+                    _LayoutCandidate(
+                        lines=(first_text, second_text),
+                        aux_text="",
+                        score=_split_score(first, second, cfg),
+                    )
+                )
+                added += 1
+            return added
+
+        added_from_natural = add_two_line_candidates(natural_splits)
+        if (
+            cfg.allow_auxiliary
+            and len(natural_splits) >= 2
+            and added_from_natural == 0
+        ):
+            aux_candidate = _auxiliary_layout(words, natural_splits, cfg)
+            if aux_candidate is not None:
+                candidates.append(aux_candidate)
+
+        if not natural_splits:
+            add_two_line_candidates(range(0, len(words) - 1))
+        elif added_from_natural == 0 and not candidates:
+            add_two_line_candidates(
+                split_index
+                for split_index in range(0, len(words) - 1)
+                if split_index not in natural_split_set
+            )
+
+    if cfg.allow_auxiliary and cfg.max_lines_per_slide >= 2 and not candidates:
+        aux_candidate = _auxiliary_layout(words, natural_splits, cfg)
+        if aux_candidate is not None:
+            candidates.append(aux_candidate)
+
+    if not candidates:
+        return None
+    return min(candidates, key=lambda candidate: candidate.score)
+
+
+def _auxiliary_layout(
+    words: list[LyricWord],
+    natural_splits: list[int],
+    cfg: LayoutConfig,
+) -> _LayoutCandidate | None:
+    split_pairs: list[tuple[int, int]] = []
+    if len(natural_splits) >= 2:
+        split_pairs = [
+            (first, second)
+            for first in natural_splits
+            for second in natural_splits
+            if first < second
+        ]
+    else:
+        split_pairs = [
+            (first, second)
+            for first in range(0, len(words) - 2)
+            for second in range(first + 1, len(words) - 1)
+        ]
+
+    candidates: list[_LayoutCandidate] = []
+    for first_split, second_split in split_pairs:
+        first = words[: first_split + 1]
+        second = words[first_split + 1 : second_split + 1]
+        aux = words[second_split + 1 :]
+        if not first or not second or not aux:
+            continue
+        first_text = _join(first)
+        second_text = _join(second)
+        aux_text = _join(aux)
+        if len(first_text) > cfg.hard_max_chars_per_line:
+            continue
+        if len(second_text) > cfg.hard_max_chars_per_line:
+            continue
+        if len(aux_text) > cfg.auxiliary_max_chars:
+            continue
+        candidates.append(
+            _LayoutCandidate(
+                lines=(first_text, second_text),
+                aux_text=aux_text,
+                score=_split_score(first, second, cfg) + 40.0 + len(aux_text) * 0.1,
+            )
+        )
+
+    if not candidates:
+        return None
+    return min(candidates, key=lambda candidate: candidate.score)
+
+
+def _natural_split_indices(words: list[LyricWord], cfg: LayoutConfig) -> list[int]:
+    result: list[int] = []
+    for index in range(0, len(words) - 1):
+        if _ends_sentence(words[index].text):
+            result.append(index)
+            continue
+        if words[index + 1].start - words[index].end >= cfg.phrase_pause_seconds:
+            result.append(index)
+    return result
+
+
+def _slide_from_candidate(words: list[LyricWord], candidate: _LayoutCandidate) -> SlidePlan:
+    return SlidePlan(
+        lines=candidate.lines,
+        start_seconds=words[0].start,
+        end_seconds=words[-1].end,
+        aux_text=candidate.aux_text,
+    )
+
+
+def _split_score(first: list[LyricWord], second: list[LyricWord], cfg: LayoutConfig) -> float:
+    first_text = _join(first)
+    second_text = _join(second)
+    score = abs(len(first_text) - len(second_text)) * 0.2
+    score += _length_over_target(len(first_text), cfg)
+    score += _length_over_target(len(second_text), cfg)
+    score += _line_score(first, cfg)
+    if _is_weak_break_word(first[-1].text, cfg):
+        score += 25.0
+    if _ends_sentence(first[-1].text):
+        score -= 8.0
+    elif second[0].start - first[-1].end >= cfg.phrase_pause_seconds:
+        score -= 6.0
+    return score
+
+
+def _line_score(words: list[LyricWord], cfg: LayoutConfig) -> float:
+    if not words:
+        return 0.0
+    return 10.0 if _is_weak_break_word(words[-1].text, cfg) else 0.0
+
+
+def _length_over_target(length: int, cfg: LayoutConfig) -> float:
+    return max(0, length - cfg.target_max_chars_per_line) * 2.0
+
+
+def _is_weak_break_word(text: str, cfg: LayoutConfig) -> bool:
+    return _normalize_word(text) in cfg.weak_break_words
+
+
+def _ends_sentence(text: str) -> bool:
+    return text.rstrip().endswith((".", ",", ";", ":", "!", "?", "..."))
+
+
+def _normalize_word(text: str) -> str:
+    return text.strip().strip(".,;:!?()[]{}").lower()
+
+
+def _join(words: list[LyricWord]) -> str:
+    return " ".join(word.text for word in words)

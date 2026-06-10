@@ -76,7 +76,15 @@ class CliTest(unittest.TestCase):
             )
 
             with zipfile.ZipFile(output_path) as archive:
-                self.assertEqual(set(archive.namelist()), {"slides.lja", "audio\\song.mp3"})
+                self.assertEqual(
+                    set(archive.namelist()),
+                    {
+                        "slides.lja",
+                        "audio\\song.mp3",
+                        "imagens\\Capa.jpg",
+                        "imagens\\slides.jpg",
+                    },
+                )
                 text = archive.read("slides.lja").decode("cp1252")
 
             self.assertIn("letra=Titulo final\r\n", text)
