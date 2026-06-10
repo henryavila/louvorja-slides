@@ -1,9 +1,10 @@
 # LouvorJA Slides
 
-Generate LouvorJA `.slja` files from local audio using `titan-chordpro-lib` as
-the transcription dependency.
+Generate LouvorJA `.slja` files from local MP3/MP4 audio. The project owns the
+LouvorJA packaging, slide layout, and local transcription pipeline; it no longer
+depends on `titan-chordpro-lib` at runtime.
 
-## Setup On Mac
+## Setup
 
 ```bash
 python3 -m venv .venv
@@ -11,9 +12,15 @@ python3 -m venv .venv
 pip install -r requirements.txt
 ```
 
-The real Titan pipeline is supported on macOS Apple Silicon. This WSL/Linux
-workspace can run the local packaging tests, but should not be treated as a real
-MP3/MP4 transcription environment.
+The local transcriber is quality-first, not speed-first. The intended full path
+is vocal separation, Whisper `large-v3` word timestamps, MMS forced alignment,
+and then the existing slide planner/exporter.
+
+Current implementation note: the orchestration, cache, CLI, audio decode,
+vocal-separation adapter, Whisper adapter, and `.slja` generation are in this
+repo. The real MMS alignment backend is deferred to the ML phase; with the
+default `--alignment mms`, the pipeline fails clearly until that backend lands.
+Use `--alignment none` only as an explicit local smoke-test bypass.
 
 ## Usage
 
@@ -22,10 +29,13 @@ python audio_to_slja.py song.mp3 --title "Song" --output song.slja
 python audio_to_slja.py video.mp4 --title "Song" --output song.slja
 ```
 
-Useful smoke test without ML:
+Explicit lower-quality smoke options while ML work is still in progress:
 
 ```bash
-python audio_to_slja.py song.mp3 --device mock --output song.slja
+python audio_to_slja.py song.mp3 --title "Song" --output song.slja \
+  --vocal-separation none --alignment none --whisper-model medium
+python scripts/smoke_local_transcription.py local_audio/song.mp3 \
+  --vocal-separation none --alignment none --whisper-model medium
 ```
 
 The generated `.slja` archive contains:
@@ -53,3 +63,7 @@ The generator plans lyric slides with congregation readability in mind:
 
 Real `.slja` files used for local validation should go in `local_samples/`. That
 directory is ignored by Git so operator examples are not committed accidentally.
+
+Local audio, generated outputs, and transcription cache should go in
+`local_audio/`, `local_outputs/`, and `.louvorja-cache/`; all three are ignored
+by Git.

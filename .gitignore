@@ -7,3 +7,7 @@ __pycache__/
 .DS_Store
 *.log
 local_samples/
+.louvorja-cache/
+local_audio/
+local_outputs/
+.atomic-skills/

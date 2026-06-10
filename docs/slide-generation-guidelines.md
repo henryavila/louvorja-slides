@@ -149,3 +149,20 @@ local_samples/
 
 Os testes versionados devem conter casos sinteticos derivados das regras, nao
 copias integrais de arquivos reais enviados para validacao manual.
+
+## Transcricao Local
+
+- A transcricao local nao depende do Titan em runtime.
+- O padrao e qualidade maxima, nao velocidade.
+- Usar separacao vocal antes do Whisper por padrao.
+- Usar Whisper `large-v3` por padrao; `medium` e fallback manual.
+- Usar timestamps por palavra, nao por segmento.
+- Filtrar tokens nao liricos entre colchetes, como `[Musica]` e
+  `[BLANK_AUDIO]`.
+- Usar alinhamento MMS para refinar timestamps por padrao quando a fase ML
+  estiver implementada.
+- Nao reduzir qualidade automaticamente. Fallbacks como
+  `--vocal-separation none` e `--alignment none` devem ser escolhas explicitas
+  do operador.
+- Enquanto o backend real de MMS estiver pendente, `--alignment none` e aceito
+  somente para smoke local e deve ser tratado como bypass de qualidade.
