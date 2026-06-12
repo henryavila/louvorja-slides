@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
 
+_LOGGER = logging.getLogger(__name__)
+
 _WHISPER_SPECIAL_TOKEN_RE = re.compile(r"^\s*\[[^\[\]]*\]\s*$")
+
+# Single source of truth for the quality-tuned whisper.cpp arguments. The
+# transcript cache key derives from this mapping, so editing a value here
+# invalidates stale cached transcripts automatically.
+QUALITY_WHISPER_KWARGS: dict[str, object] = {
+    "token_timestamps": True,
+    "max_len": 1,
+    "split_on_word": True,
+    "entropy_thold": 2.2,
+    "no_speech_thold": 0.7,
+}
 
 
 @dataclass(frozen=True)
@@ -158,13 +172,7 @@ class LocalWhisperTranscriber:
         if sample_rate != 16000:
             raise ValueError("LocalWhisperTranscriber requires 16 kHz mono samples")
 
-        kwargs: dict[str, object] = {
-            "token_timestamps": True,
-            "max_len": 1,
-            "split_on_word": True,
-            "entropy_thold": 2.2,
-            "no_speech_thold": 0.7,
-        }
+        kwargs: dict[str, object] = dict(QUALITY_WHISPER_KWARGS)
         if language is not None:
             kwargs["language"] = language
 
@@ -191,9 +199,22 @@ class LocalWhisperTranscriber:
 
         return Transcript(
             words=words,
-            detected_language=language,
+            detected_language=(
+                language if language is not None else self._detect_language(samples)
+            ),
             duration_seconds=duration_seconds,
         )
+
+    def _detect_language(self, samples: Any) -> str | None:
+        detect = getattr(self._model, "auto_detect_language", None)
+        if not callable(detect):
+            return None
+        try:
+            (language, _probability), _all_probabilities = detect(samples)
+        except Exception as exc:  # noqa: BLE001 - detection must not break transcription
+            _LOGGER.warning("whisper language detection failed: %s", exc)
+            return None
+        return str(language)
 
     @staticmethod
     def _load_model(model_id: str) -> Any:

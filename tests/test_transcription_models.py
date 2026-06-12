@@ -92,6 +92,60 @@ class LocalWhisperTest(unittest.TestCase):
         self.assertEqual(calls[0]["no_speech_thold"], 0.7)
         self.assertEqual(calls[0]["language"], "pt")
 
+    def test_transcriber_reports_model_detected_language_when_not_requested(self) -> None:
+        detect_calls: list[int] = []
+
+        class FakeModel:
+            def transcribe(
+                self, samples: np.ndarray, **kwargs: object
+            ) -> list[SimpleNamespace]:
+                return [SimpleNamespace(t0=100, t1=160, text="Holy")]
+
+            def auto_detect_language(
+                self, samples: np.ndarray
+            ) -> tuple[tuple[str, float], dict[str, float]]:
+                detect_calls.append(1)
+                return ("en", 0.93), {"en": 0.93, "pt": 0.05}
+
+        transcriber = LocalWhisperTranscriber(model=FakeModel(), model_id="large-v3")
+
+        transcript = transcriber.transcribe_samples(
+            samples=np.zeros(16000, dtype=np.float32),
+            sample_rate=16000,
+            duration_seconds=1.0,
+            language=None,
+        )
+
+        self.assertEqual(transcript.detected_language, "en")
+        self.assertEqual(detect_calls, [1])
+
+    def test_transcriber_skips_language_detection_when_language_is_requested(self) -> None:
+        detect_calls: list[int] = []
+
+        class FakeModel:
+            def transcribe(
+                self, samples: np.ndarray, **kwargs: object
+            ) -> list[SimpleNamespace]:
+                return [SimpleNamespace(t0=100, t1=160, text="Fala")]
+
+            def auto_detect_language(
+                self, samples: np.ndarray
+            ) -> tuple[tuple[str, float], dict[str, float]]:
+                detect_calls.append(1)
+                return ("en", 0.93), {"en": 0.93}
+
+        transcriber = LocalWhisperTranscriber(model=FakeModel(), model_id="large-v3")
+
+        transcript = transcriber.transcribe_samples(
+            samples=np.zeros(16000, dtype=np.float32),
+            sample_rate=16000,
+            duration_seconds=1.0,
+            language="pt",
+        )
+
+        self.assertEqual(transcript.detected_language, "pt")
+        self.assertEqual(detect_calls, [])
+
     def test_transcriber_filters_bracketed_non_lyric_tokens(self) -> None:
         class FakeModel:
             def transcribe(

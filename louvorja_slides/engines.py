@@ -61,6 +61,17 @@ class LocalLinuxEngine:
         self._transcribe_fn = transcribe_fn
 
     def transcribe(self, audio_path: Path, config: AudioToDocumentConfig) -> Any:
+        if config.force_mock:
+            raise ValueError(
+                "--device mock is only supported by the Titan engine; the local "
+                "engine always runs the real pipeline. Use `--engine titan` on "
+                "macOS or drop `--device mock`."
+            )
+        if config.backend == "mps":
+            raise ValueError(
+                "--device mps is an Apple Silicon backend for the Titan engine; "
+                "the local engine supports cpu or cuda."
+            )
         if self._transcribe_fn is not None:
             transcript = self._transcribe_fn(audio_path, config)
         else:
@@ -75,6 +86,7 @@ class LocalLinuxEngine:
                     whisper_model=config.whisper_model or "large-v3",
                     vocal_separation=config.vocal_separation,
                     alignment=config.alignment,
+                    device=config.backend,
                 ),
             )
         return transcript_to_document(transcript, title=config.title or audio_path.stem)

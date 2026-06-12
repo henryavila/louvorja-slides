@@ -44,21 +44,56 @@ def refine_words_from_spans(
         low, high = frame_ranges[word_idx]
         frame_ranges[word_idx] = (min(low, start_frame), max(high, end_frame))
 
+    aligned_times = {
+        index: (start_frame * frame_seconds, (end_frame + 1) * frame_seconds)
+        for index, (start_frame, end_frame) in frame_ranges.items()
+    }
+    previous_aligned_start: float | None = None
+    for index in sorted(aligned_times):
+        start = aligned_times[index][0]
+        if previous_aligned_start is not None and start < previous_aligned_start:
+            raise AlignmentError(
+                f"aligned spans are not monotonic at word index {index}; "
+                "refusing to build a reordered timeline"
+            )
+        previous_aligned_start = start
+
+    next_aligned_start: dict[int, float] = {}
+    upcoming: float | None = None
+    for index in range(len(words) - 1, -1, -1):
+        if upcoming is not None:
+            next_aligned_start[index] = upcoming
+        if index in aligned_times:
+            upcoming = aligned_times[index][0]
+
     refined: list[TranscribedWord] = []
+    previous_end = 0.0
     for index, word in enumerate(words):
-        if index not in frame_ranges:
-            refined.append(word)
-            continue
-        start_frame, end_frame = frame_ranges[index]
+        if index in aligned_times:
+            start, end = aligned_times[index]
+            source = "mms_align"
+        else:
+            # Unalignable words (digits, punctuation-only) keep their original
+            # timing clamped between aligned neighbours. Without the clamp the
+            # mixed Whisper/MMS timeline reorders words when Transcript sorts
+            # by start time, which also corrupts phoneme parent_word_idx.
+            start = max(word.start, previous_end)
+            end = max(word.end, start)
+            upper_bound = next_aligned_start.get(index)
+            if upper_bound is not None:
+                start = min(start, upper_bound)
+                end = min(end, upper_bound)
+            source = word.source
         refined.append(
             TranscribedWord(
                 text=word.text,
-                start=start_frame * frame_seconds,
-                end=(end_frame + 1) * frame_seconds,
+                start=start,
+                end=end,
                 confidence=word.confidence,
-                source="mms_align",
+                source=source,
             )
         )
+        previous_end = end
     return refined
 
 
@@ -172,14 +207,24 @@ def attach_spans_to_words(
     tokenizer: Any,
     labels: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
+    expected_count = sum(len(word_tokens) for word_tokens in tokens_per_word)
+    if len(spans) != expected_count:
+        raise AlignmentError(
+            f"forced alignment produced {len(spans)} token spans for "
+            f"{expected_count} target tokens"
+        )
+
     result: list[dict[str, Any]] = []
     token_cursor = 0
     for word_idx, word_tokens in enumerate(tokens_per_word):
-        for _token in word_tokens:
-            if token_cursor >= len(spans):
-                break
+        for expected_token in word_tokens:
             span = spans[token_cursor]
             token_id = int(span["_tok"])
+            if token_id != int(expected_token):
+                raise AlignmentError(
+                    f"aligned token {token_id} does not match target token "
+                    f"{int(expected_token)} at span {token_cursor}"
+                )
             if hasattr(tokenizer, "decode"):
                 try:
                     text = tokenizer.decode([token_id])
@@ -207,6 +252,14 @@ def _label_for_token(token_id: int, labels: Sequence[str] | None) -> str:
     return str(token_id)
 
 
+def _device_of_model(model: Any) -> str:
+    try:
+        parameter = next(iter(model.parameters()))
+        return str(parameter.device)
+    except (AttributeError, StopIteration, TypeError):
+        return "cpu"
+
+
 class MmsForcedAligner:
     def __init__(
         self,
@@ -225,7 +278,13 @@ class MmsForcedAligner:
         self._tokenizer = tokenizer
         self._blank_id = 0 if blank_id is None else blank_id
         self._labels = labels
-        self._device = device or "cpu"
+        self._requested_device = device
+        if device is not None:
+            self._device = device
+        elif model is not None:
+            self._device = _device_of_model(model)
+        else:
+            self._device = "cpu"
 
     def align_transcript(
         self,
@@ -297,8 +356,23 @@ class MmsForcedAligner:
                 emissions_list.append(emissions.cpu())
 
         stitched = torch.cat(emissions_list, dim=0)
-        if context_frames > 0:
-            stitched = stitched[:, context_frames:-context_frames, :]
+        # The wav2vec2 conv stack emits slightly fewer frames than
+        # chunk_samples/320 (1699 instead of 1700 for a 34 s chunk). Keep
+        # exactly window_samples/320 frames per chunk so the global
+        # frame -> seconds grid stays exact; cropping a fixed context count
+        # from both ends instead would drop one inner frame per chunk and
+        # drift timestamps ~20 ms earlier per 30 s window.
+        window_frames = window_samples // _FRAME_SAMPLES
+        required_frames = context_frames + window_frames
+        if int(stitched.shape[1]) < required_frames:
+            raise AlignmentError(
+                f"MMS model produced {int(stitched.shape[1])} emission frames per "
+                f"chunk; at least {required_frames} are required to keep the "
+                f"{_FRAME_SECONDS * 1000:.0f} ms timeline grid. The conv stack "
+                "emits slightly fewer frames than samples/320, so "
+                "context_seconds must be large enough to absorb the shortfall."
+            )
+        stitched = stitched[:, context_frames : context_frames + window_frames, :]
         stitched = stitched.flatten(0, 1)
 
         extension_frames = int(round((extension / _SAMPLE_RATE) / _FRAME_SECONDS))
@@ -317,7 +391,10 @@ class MmsForcedAligner:
                 "scripts/install_linux_local_engine.sh or use `--alignment none`."
             ) from exc
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if self._requested_device is not None:
+            device = self._requested_device
+        else:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         bundle = MMS_FA
         self._model = bundle.get_model().to(device).train(False)
         self._tokenizer = bundle.get_tokenizer()

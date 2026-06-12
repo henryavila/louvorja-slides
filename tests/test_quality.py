@@ -82,6 +82,40 @@ class QualityAnalysisTest(unittest.TestCase):
 
         self.assertTrue(report.acceptable, report.messages)
 
+    def test_zero_lyric_slides_fail_the_quality_gate(self) -> None:
+        report = analyze_slide_quality([])
+
+        self.assertFalse(report.acceptable)
+        self.assertIn("no lyric slides", "\n".join(report.messages))
+
+        with self.assertRaisesRegex(QualityViolation, "no lyric slides"):
+            enforce_quality(slides=[], mode="fail")
+
+    def test_positive_gap_threshold_is_configurable(self) -> None:
+        transcript = Transcript(
+            words=[
+                TranscribedWord("Fala", 1.00, 1.20),
+                TranscribedWord("comigo", 1.24, 1.40),
+                TranscribedWord("Senhor", 1.44, 1.60),
+            ],
+            detected_language="pt",
+            duration_seconds=3.0,
+        )
+
+        strict = analyze_transcript_quality(
+            transcript,
+            QualityThresholds(min_positive_gap_ratio=0.5, min_gap_seconds=0.05),
+        )
+        lenient = analyze_transcript_quality(
+            transcript,
+            QualityThresholds(min_positive_gap_ratio=0.5, min_gap_seconds=0.03),
+        )
+
+        self.assertFalse(strict.acceptable)
+        self.assertEqual(strict.positive_gap_count, 0)
+        self.assertTrue(lenient.acceptable, lenient.messages)
+        self.assertEqual(lenient.positive_gap_count, 2)
+
     def test_enforce_quality_raises_with_combined_context(self) -> None:
         slides = [
             Slide(

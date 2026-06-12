@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +39,16 @@ def load_json(path: Path) -> dict[str, Any] | None:
 def save_json(path: Path, payload: dict[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    with temp_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
-        handle.write("\n")
-    temp_path.replace(path)
+    # A unique temp file per writer keeps concurrent processes from
+    # interleaving on one shared temp path before the atomic replace.
+    descriptor, temp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f"{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+        os.replace(temp_name, path)
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        raise

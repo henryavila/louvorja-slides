@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from louvorja_slides.engines import (
     AudioToDocumentConfig,
@@ -66,6 +67,43 @@ class EngineContractTest(unittest.TestCase):
         self.assertEqual(doc.metadata.title, "Minha musica")
         self.assertIs(doc.transcript, transcript)
         self.assertEqual(doc.sections[0].lines[0].text, "Fala comigo")
+
+    def test_local_engine_rejects_mock_device(self) -> None:
+        def fake_transcribe(audio_path: Path, config: AudioToDocumentConfig) -> Transcript:
+            raise AssertionError("the local engine must reject mock before transcribing")
+
+        engine = LocalLinuxEngine(transcribe_fn=fake_transcribe)
+
+        with self.assertRaisesRegex(ValueError, "mock"):
+            engine.transcribe(Path("song.mp3"), AudioToDocumentConfig(force_mock=True))
+
+    def test_local_engine_rejects_mps_device(self) -> None:
+        def fake_transcribe(audio_path: Path, config: AudioToDocumentConfig) -> Transcript:
+            raise AssertionError("the local engine must reject mps before transcribing")
+
+        engine = LocalLinuxEngine(transcribe_fn=fake_transcribe)
+
+        with self.assertRaisesRegex(ValueError, "mps"):
+            engine.transcribe(Path("song.mp3"), AudioToDocumentConfig(backend="mps"))
+
+    def test_local_engine_forwards_backend_device_to_pipeline(self) -> None:
+        transcript = Transcript(
+            words=[TranscribedWord("Fala", 1.0, 1.3)],
+            detected_language="pt",
+            duration_seconds=5.0,
+        )
+
+        with patch(
+            "louvorja_slides.local_pipeline.transcribe_audio_local",
+            return_value=transcript,
+        ) as transcribe_mock:
+            LocalLinuxEngine().transcribe(
+                Path("song.mp3"),
+                AudioToDocumentConfig(backend="cuda"),
+            )
+
+        pipeline_config = transcribe_mock.call_args.kwargs["config"]
+        self.assertEqual(pipeline_config.device, "cuda")
 
     def test_mac_engine_delegates_to_titan_transcribe(self) -> None:
         doc = SimpleNamespace(metadata=SimpleNamespace(title="Titan"), sections=[])

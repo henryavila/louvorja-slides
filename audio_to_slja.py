@@ -37,7 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--device",
         choices=("auto", "mps", "cuda", "cpu", "mock"),
         default="auto",
-        help="Backend preference. Use 'mock' for Titan packaging smoke tests.",
+        help=(
+            "Backend preference. 'mock' is Titan-only (packaging smoke tests); "
+            "on the local engine, cpu/cuda select the forced-alignment device."
+        ),
     )
     parser.add_argument(
         "--whisper-model",

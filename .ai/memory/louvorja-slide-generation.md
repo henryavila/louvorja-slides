@@ -87,3 +87,31 @@
   phonemes; `py_compile` is only a syntax gate.
 - Real-song quality metrics must read the deterministic aligned cache produced
   by that run, not the newest transcript file under the global cache.
+- Chunked MMS emissions must keep exactly `window_samples / 320` frames per
+  chunk. The wav2vec2 conv stack emits 1699 frames for a 34 s chunk (not
+  1700), so cropping a fixed context count from both ends drops one inner
+  frame per chunk and drifts timestamps ~20 ms earlier per 30 s window
+  (measured +0.18 s at the end of a 4:56 song). Stitching tests must encode
+  frame indices into emission values; shape-only assertions cannot catch
+  wrong crop offsets.
+- Refined transcripts must keep word order stable. Unalignable words (digits,
+  punctuation-only) keep Whisper timing clamped between aligned neighbours;
+  mixed Whisper/MMS timelines otherwise reorder under `Transcript`'s sort and
+  corrupt phoneme `parent_word_idx`. `refine_words_from_spans` rejects
+  non-monotonic aligned spans with `AlignmentError`.
+- The aligned-stage cache variant includes `_ALIGNMENT_REVISION`. Bump it
+  whenever alignment output changes for identical inputs so stale aligned
+  transcripts recompute without invalidating expensive raw Whisper caches.
+- The separation cache is per-model (`vocals-<model>.wav`) with a legacy
+  `vocals.wav` fallback for the default model only. Separation runs in a
+  unique temp stems dir per run (concurrent-safe), renames the vocals stem
+  atomically into place, and deletes intermediate stems.
+- `save_json` writes through a unique temp file plus `os.replace`; a fixed
+  `.tmp` name lets concurrent writers corrupt each other.
+- Whisper quality kwargs live once in `QUALITY_WHISPER_KWARGS`
+  (`transcription.py`); the transcript cache key derives from it, so editing
+  the kwargs auto-invalidates stale transcripts.
+- The local engine rejects `--device mock` and `--device mps` with a clear
+  error; `cpu`/`cuda` select the MMS forced-alignment device.
+- The quality gate fails a run that produced zero lyric slides; empty-input
+  ratios defaulting to 0.0 must not sail through the gate.

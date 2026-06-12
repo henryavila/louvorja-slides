@@ -5,6 +5,20 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3.12}"
 VENV_DIR="${VENV_DIR:-"${ROOT_DIR}/.venv"}"
 
+PREFETCH_MODELS=0
+for arg in "$@"; do
+  case "${arg}" in
+    --prefetch-models)
+      PREFETCH_MODELS=1
+      ;;
+    *)
+      echo "error: unknown option ${arg}" >&2
+      echo "usage: $0 [--prefetch-models]" >&2
+      exit 2
+      ;;
+  esac
+done
+
 APT_PACKAGES=(
   python3.12-dev
   python3.12-venv
@@ -96,3 +110,13 @@ _ = MMS_FA.get_labels()
 
 print("Local Linux engine dependencies are installed.")
 PY
+
+if ((PREFETCH_MODELS)); then
+  echo "Prefetching the MMS forced-alignment model (~1.2 GB on first run)..."
+  python - <<'PY'
+from torchaudio.pipelines import MMS_FA
+
+_ = MMS_FA.get_model()
+print("MMS_FA model weights are cached locally.")
+PY
+fi

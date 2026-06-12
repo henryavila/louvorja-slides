@@ -114,8 +114,13 @@ class AlignmentTest(unittest.TestCase):
     def test_generate_emissions_long_audio_chunks_and_stitches(self) -> None:
         import torch
 
+        # A 34 s chunk (544,000 samples) through the wav2vec2 conv stack
+        # (kernels 10,3,3,3,3,2,2 / strides 5,2,2,2,2,2,2) emits 1699 frames,
+        # not the idealized 544000/320 = 1700. The stitcher must still keep
+        # exactly window_samples/320 = 1500 frames per chunk on the global
+        # 20 ms grid, or timestamps drift one frame per chunk.
         def fake_forward(batch):
-            return torch.zeros(batch.shape[0], 1700, 32), None
+            return torch.zeros(batch.shape[0], 1699, 32), None
 
         fake_model = MagicMock(side_effect=fake_forward)
         aligner = MmsForcedAligner(model=fake_model, tokenizer=object(), blank_id=0)
@@ -129,6 +134,134 @@ class AlignmentTest(unittest.TestCase):
 
         self.assertEqual(fake_model.call_count, 3)
         self.assertEqual(tuple(result.shape), (1, 4500, 32))
+
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "torch not installed")
+    def test_generate_emissions_keeps_exact_inner_window_frames(self) -> None:
+        import torch
+
+        # Encode each frame's index into its emission value so a wrong crop
+        # offset ([0:1500], [99:1599], [199:1699], ...) changes the values,
+        # not just the shape.
+        def fake_forward(batch):
+            frames = torch.arange(1699, dtype=torch.float32).view(1, 1699, 1)
+            return frames.expand(batch.shape[0], 1699, 32).clone(), None
+
+        fake_model = MagicMock(side_effect=fake_forward)
+        aligner = MmsForcedAligner(model=fake_model, tokenizer=object(), blank_id=0)
+
+        result = aligner.generate_emissions(
+            torch.zeros(90 * 16000),
+            window_seconds=30.0,
+            context_seconds=2.0,
+            batch_size=1,
+        )
+
+        # 2 s of context = 100 frames; the inner 30 s window keeps frames
+        # 100..1599 of every chunk.
+        self.assertEqual(float(result[0, 0, 0]), 100.0)
+        self.assertEqual(float(result[0, 1499, 0]), 1599.0)
+        self.assertEqual(float(result[0, 1500, 0]), 100.0)
+        self.assertEqual(float(result[0, 4499, 0]), 1599.0)
+
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "torch not installed")
+    def test_generate_emissions_raises_when_chunk_frames_are_insufficient(self) -> None:
+        import torch
+
+        def fake_forward(batch):
+            return torch.zeros(batch.shape[0], 1599, 32), None
+
+        fake_model = MagicMock(side_effect=fake_forward)
+        aligner = MmsForcedAligner(model=fake_model, tokenizer=object(), blank_id=0)
+
+        with self.assertRaisesRegex(AlignmentError, "frames"):
+            aligner.generate_emissions(
+                torch.zeros(90 * 16000),
+                window_seconds=30.0,
+                context_seconds=2.0,
+                batch_size=1,
+            )
+
+    def test_refine_words_keeps_unalignable_words_in_monotonic_order(self) -> None:
+        words = [
+            TranscribedWord("vinte", 10.0, 10.4, source="whisper"),
+            TranscribedWord("24", 10.4, 10.8, source="whisper"),
+            TranscribedWord("horas", 10.8, 11.2, source="whisper"),
+        ]
+        spans = [
+            {"word_idx": 0, "start_frame": 50, "end_frame": 70},
+            {"word_idx": 2, "start_frame": 80, "end_frame": 110},
+        ]
+
+        refined = refine_words_from_spans(words, spans, frame_seconds=0.02)
+
+        self.assertEqual([word.text for word in refined], ["vinte", "24", "horas"])
+        starts = [word.start for word in refined]
+        self.assertEqual(starts, sorted(starts))
+        self.assertGreaterEqual(refined[1].start, refined[0].start)
+        self.assertLessEqual(refined[1].start, refined[2].start)
+        self.assertLessEqual(refined[1].end, refined[2].start)
+        self.assertEqual(refined[1].source, "whisper")
+
+    def test_refine_words_clamps_consecutive_unalignable_words(self) -> None:
+        words = [
+            TranscribedWord("vinte", 10.0, 10.4, source="whisper"),
+            TranscribedWord("24", 10.4, 10.6, source="whisper"),
+            TranscribedWord("48", 10.6, 10.8, source="whisper"),
+            TranscribedWord("horas", 10.8, 11.2, source="whisper"),
+        ]
+        spans = [
+            {"word_idx": 0, "start_frame": 50, "end_frame": 70},
+            {"word_idx": 3, "start_frame": 80, "end_frame": 110},
+        ]
+
+        refined = refine_words_from_spans(words, spans, frame_seconds=0.02)
+
+        self.assertEqual(
+            [word.text for word in refined],
+            ["vinte", "24", "48", "horas"],
+        )
+        keys = [(word.start, word.end) for word in refined]
+        self.assertEqual(keys, sorted(keys))
+        for word in refined:
+            self.assertLessEqual(word.start, word.end)
+
+    def test_refine_words_rejects_non_monotonic_aligned_spans(self) -> None:
+        words = [
+            TranscribedWord("Fala", 1.0, 1.4, source="whisper"),
+            TranscribedWord("comigo", 1.4, 1.8, source="whisper"),
+        ]
+        spans = [
+            {"word_idx": 0, "start_frame": 100, "end_frame": 120},
+            {"word_idx": 1, "start_frame": 10, "end_frame": 20},
+        ]
+
+        with self.assertRaisesRegex(AlignmentError, "monotonic"):
+            refine_words_from_spans(words, spans, frame_seconds=0.02)
+
+    def test_refine_transcript_keeps_word_order_and_phoneme_parents(self) -> None:
+        transcript = Transcript(
+            words=[
+                TranscribedWord("vinte", 10.0, 10.4, source="whisper"),
+                TranscribedWord("24", 10.4, 10.8, source="whisper"),
+                TranscribedWord("horas", 10.8, 11.2, source="whisper"),
+            ],
+            detected_language="pt",
+            duration_seconds=20.0,
+        )
+        spans = [
+            {"text": "v", "word_idx": 0, "start_frame": 50, "end_frame": 70},
+            {"text": "o", "word_idx": 2, "start_frame": 80, "end_frame": 110},
+        ]
+
+        refined = refine_transcript_from_spans(transcript, spans, frame_seconds=0.02)
+
+        self.assertEqual(
+            [word.text for word in refined.words],
+            ["vinte", "24", "horas"],
+        )
+        phoneme = (refined.phonemes or [])[1]
+        self.assertEqual(phoneme.symbol, "o")
+        self.assertEqual(refined.words[phoneme.parent_word_idx].text, "horas")
 
     def test_build_mms_targets_preserves_original_word_indices(self) -> None:
         class FakeTokenizer:
@@ -222,6 +355,54 @@ class AlignmentTest(unittest.TestCase):
         )
 
         self.assertEqual([span["text"] for span in attached], ["f", "e"])
+
+    def test_attach_spans_to_words_raises_on_span_count_mismatch(self) -> None:
+        spans = [{"_tok": 10, "start_frame": 1, "end_frame": 2}]
+
+        with self.assertRaisesRegex(AlignmentError, "span"):
+            attach_spans_to_words(spans, [[10], [20]], tokenizer=object(), labels=["a"])
+
+    def test_attach_spans_to_words_raises_on_token_identity_mismatch(self) -> None:
+        spans = [{"_tok": 99, "start_frame": 1, "end_frame": 2}]
+
+        with self.assertRaisesRegex(AlignmentError, "token"):
+            attach_spans_to_words(spans, [[10]], tokenizer=object(), labels=["a"])
+
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "torch not installed")
+    def test_constructor_derives_device_from_injected_model(self) -> None:
+        import torch
+
+        model = torch.nn.Linear(1, 1).to("meta")
+
+        aligner = MmsForcedAligner(model=model, tokenizer=object(), blank_id=0)
+
+        self.assertEqual(aligner._device, "meta")
+
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "torch not installed")
+    def test_load_bundle_honors_explicit_device(self) -> None:
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        model = MagicMock()
+        model.to.return_value = model
+        model.train.return_value = model
+        fake_bundle = SimpleNamespace(
+            get_model=lambda: model,
+            get_tokenizer=lambda: object(),
+            get_labels=lambda: ["-"],
+        )
+        fake_module = SimpleNamespace(MMS_FA=fake_bundle)
+
+        aligner = MmsForcedAligner(device="cpu")
+        with (
+            patch.dict(sys.modules, {"torchaudio.pipelines": fake_module}),
+            patch("torch.cuda.is_available", return_value=True),
+        ):
+            aligner._load_bundle()
+
+        self.assertEqual(aligner._device, "cpu")
+        model.to.assert_called_once_with("cpu")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ macOS.
 
 ```bash
 ./scripts/install_linux_local_engine.sh
+# optionally pre-download the ~1.2 GB MMS alignment model:
+./scripts/install_linux_local_engine.sh --prefetch-models
 ```
 
 If the script reports missing OS packages, run the command it prints. On a
@@ -52,11 +54,17 @@ The local engine defaults to `--vocal-separation htdemucs_ft` and
 `--alignment none`. `--alignment mms` is available behind the alignment contract,
 but requires a wired MMS/torchaudio implementation in the environment.
 
+`--device mock` and `--device mps` are Titan-only options; the local engine
+rejects them with an error instead of silently running the real pipeline.
+On the local engine, `--device cpu`/`--device cuda` select the device used by
+MMS forced alignment.
+
 Generated output is checked by a quality gate before the archive is written.
 The default is `--quality-gate fail`, which rejects suspicious output such as
-too much essential lyric text in `letra_aux`, long main lines, or weak local
-word timestamps. Use `--quality-gate warn` to write the archive while preserving
-the diagnostics, or `--quality-gate off` only for low-level debugging.
+too much essential lyric text in `letra_aux`, long main lines, weak local
+word timestamps, or a run that produced no lyric slides at all. Use
+`--quality-gate warn` to write the archive while preserving the diagnostics,
+or `--quality-gate off` only for low-level debugging.
 
 The generated `.slja` archive contains:
 

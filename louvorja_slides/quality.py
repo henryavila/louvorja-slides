@@ -24,6 +24,7 @@ class QualityThresholds:
     max_median_line_chars: float = 28.0
     max_zero_duration_word_ratio: float = 0.02
     min_positive_gap_ratio: float = 0.05
+    min_gap_seconds: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,8 @@ def analyze_slide_quality(
     )
 
     messages: list[str] = []
+    if report.slide_count == 0:
+        messages.append("no lyric slides were generated")
     if report.auxiliary_word_ratio > cfg.max_aux_word_ratio:
         messages.append(
             "auxiliary lyric word ratio "
@@ -152,7 +155,7 @@ def analyze_transcript_quality(
     positive_gap_count = sum(
         1
         for previous, current in zip(words, words[1:])
-        if current.start - previous.end > 0.05
+        if current.start - previous.end > cfg.min_gap_seconds
     )
 
     report = TranscriptQualityReport(
