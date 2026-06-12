@@ -4,14 +4,40 @@
 
 - This project generates LouvorJA `.slja` archives from local `.mp3` or `.mp4`
   audio files.
-- `titan-chordpro-lib` is used as a local dependency for audio transcription and
-  word timestamps, but the LouvorJA-specific export/layout code lives in this
-  repository.
-- The Linux/WSL environment can run unit tests and packaging smoke tests, but
-  real transcription is expected to be validated on macOS with the Titan local
-  dependency installed.
+- Audio transcription now goes through an engine contract. `auto` selects the
+  local engine on Linux/WSL and the Titan engine on macOS.
+- `titan-chordpro-lib` remains an optional macOS engine dependency. The
+  LouvorJA-specific export/layout code lives in this repository.
+- The local engine ports only the Titan decisions needed for slides: Whisper
+  word timestamps, quality transcription arguments, bracket-token filtering,
+  cache keys by quality configuration, and adaptive phrase grouping.
 - Real user-provided `.slja` files are validation samples only. Keep them under
   `local_samples/` and do not commit them unless explicitly requested.
+- Linux/WSL local setup is reproducible through
+  `scripts/install_linux_local_engine.sh`. On fresh Ubuntu/WSL, the known apt
+  prerequisites are `python3.12-dev`, `python3.12-venv`, `build-essential`,
+  `ffmpeg`, and `git`.
+- A real ASR-only run of `ADORADORES 3 - FE E ACAO.mp3` with `medium`,
+  `--vocal-separation none`, and `--alignment none` produced a structurally
+  valid but poor archive: 19 lyric slides for about 4:56, excessive essential
+  lyrics in `letra_aux`, long main lines, and weak word timestamps. Keep quality
+  gates on by default before writing `.slja`.
+- After installing Linux dependencies, the same song with `medium`,
+  `--vocal-separation htdemucs_ft`, and `--alignment none` still failed the
+  quality gate: 20 lyric slides, 30.6% auxiliary lyric words, 80.0% auxiliary
+  lyric slides, 40.0% lines over target, and transcript positive gap ratio 0.0%.
+  Vocal separation alone is not enough; the local path needs real forced
+  alignment and planner changes before production use.
+- `audio-separator==0.44.2` imports `audio_separator.separator`, which also
+  requires `onnxruntime`; keep `onnxruntime` as a direct pinned dependency and
+  verify the submodule import in the Linux installer.
+- Titan's high-quality chord/syllable placement comes from a full alignment
+  chain, not Whisper timestamps alone: `torchaudio.pipelines.MMS_FA` creates
+  20ms-frame forced-alignment token spans over stitched chunked emissions,
+  those spans become `PhonemeEvent`s, syllabification groups phonemes into
+  `SyllableEvent`s, and the placer anchors chords to melisma/stressed/nearest
+  syllables before falling back to word starts. Porting this repo's alignment
+  should bring over that real MMS runner and preserve phoneme/syllable timing.
 
 ## Slide Layout Decisions
 
@@ -25,6 +51,8 @@
   or `nao`.
 - `letra_aux` is valid as short overflow text or as an automatically counted
   repetition marker `(Nx)`.
+- Quality gates must not count `(Nx)` repetition markers as bad auxiliary
+  lyric text.
 - Consecutive generated slides with identical main lines are collapsed into one
   slide with `letra_aux=(Nx)`, preserving the first start timestamp and the last
   end timestamp. Non-consecutive repetitions stay separate.
@@ -42,3 +70,20 @@
 - When there are enough natural pauses to form main text plus short auxiliary
   text, the auxiliary layout can be preferable to breaking in the middle of a
   phrase. Keep tests for both paths.
+- The MMS port must pin and verify matching `torch`/`torchaudio` versions.
+  In this local package index, `torch` is available through `2.12.0` but
+  `torchaudio` only through `2.11.0`; use the verified pair
+  `torch==2.11.0` and `torchaudio==2.11.0`.
+- MMS tokenizer failures must not discard the whole target sequence. Tokenize
+  per word, preserve original word offsets, skip only rejected words, and raise
+  an explicit alignment error when no target tokens remain.
+- The real `torchaudio.pipelines.MMS_FA` tokenizer has no `decode()` method.
+  Map aligned token IDs back to symbols with `MMS_FA.get_labels()`; numeric
+  fallback symbols are stale/bad cache data.
+- Cache regression tests for aligned transcripts must seed stale schema data and
+  prove the aligner runs and writes phonemes. Checking `_CACHE_SCHEMA_VERSION`
+  or `_variant()` alone is not enough.
+- Real MMS smoke verification must execute the aligner and require nonzero
+  phonemes; `py_compile` is only a syntax gate.
+- Real-song quality metrics must read the deterministic aligned cache produced
+  by that run, not the newest transcript file under the global cache.
