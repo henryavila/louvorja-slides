@@ -1,2 +1,7 @@
-# Local dependency. Install on the Mac that runs Titan's real ML stack.
--e ../titan-chordpro-lib[mac]
+imageio-ffmpeg==0.6.0
+numpy==2.4.6
+pywhispercpp==1.5.0
+audio-separator==0.44.2
+onnxruntime==1.26.0
+torch==2.11.0
+torchaudio==2.11.0

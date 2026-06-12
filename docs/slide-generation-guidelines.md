@@ -122,7 +122,7 @@ Se a repeticao ocorre em outro ponto da musica, mas nao de forma consecutiva:
 ## Algoritmo Recomendado
 
 1. Agrupar palavras em frases musicais usando pontuacao, pausas entre palavras,
-   quebras ja inferidas pelo Titan e timestamps.
+   quebras ja inferidas pela engine ativa e timestamps.
 2. Para cada grupo candidato, tentar montar 1 linha, 2 linhas balanceadas e
    2 linhas com tolerancia ate 34 caracteres.
 3. Pontuar candidatos:
@@ -149,3 +149,40 @@ local_samples/
 
 Os testes versionados devem conter casos sinteticos derivados das regras, nao
 copias integrais de arquivos reais enviados para validacao manual.
+
+## Gate De Qualidade
+
+A CLI deve rodar um gate objetivo antes de escrever o `.slja`.
+
+O gate deve rejeitar por padrao (`--quality-gate fail`) quando detectar sinais
+de saida ruim:
+
+- proporcao alta de palavras essenciais em `letra_aux`;
+- muitos slides com `letra_aux` que nao seja marcador `(Nx)`;
+- linhas principais acima do alvo de 28 caracteres em excesso;
+- mediana de linhas principais acima do alvo;
+- transcricao local com muitos tokens de duracao zero;
+- transcricao local com poucos gaps positivos entre palavras.
+
+`letra_aux=(Nx)` nao conta como texto auxiliar ruim, porque e marcador de
+repeticao. `--quality-gate warn` pode ser usado para gerar o arquivo mesmo com
+diagnosticos. `--quality-gate off` deve ficar restrito a depuracao.
+
+## Engines De Transcricao
+
+- A CLI usa um contrato unico de engine para transformar audio em documento de
+  letra com timestamps.
+- `--engine auto` seleciona Titan em macOS e a engine local em Linux/WSL.
+- A engine Titan chama `titan_chordpro.orchestrator.transcribe` sem vazar essa
+  dependencia para o exportador LouvorJA.
+- A engine local usa a logica portada do Titan que e relevante para slides:
+  timestamps por palavra, argumentos de qualidade do Whisper, filtro de tokens
+  entre colchetes, cache por configuracao e agrupamento adaptativo de frases.
+- Fallbacks que reduzem qualidade, como `--vocal-separation none`, devem ser
+  escolhas explicitas do operador quando uma etapa local nao estiver disponivel.
+- `--alignment mms` existe atras do contrato de alinhamento, mas o default
+  operacional da engine local fica em `--alignment none` ate a implementacao
+  MMS real estar ligada e validada neste repositorio.
+- O script de instalacao Linux/WSL e `scripts/install_linux_local_engine.sh`.
+  Ele nao executa `sudo`; quando faltarem pacotes do sistema, imprime o comando
+  `apt-get` reproduzivel para o operador executar.

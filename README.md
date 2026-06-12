@@ -1,19 +1,37 @@
 # LouvorJA Slides
 
-Generate LouvorJA `.slja` files from local audio using `titan-chordpro-lib` as
-the transcription dependency.
+Generate LouvorJA `.slja` files from local audio. The CLI selects the
+transcription engine automatically: local Linux/WSL on Linux, and Titan on
+macOS.
 
-## Setup On Mac
+## Setup On Linux/WSL
+
+```bash
+./scripts/install_linux_local_engine.sh
+```
+
+If the script reports missing OS packages, run the command it prints. On a
+fresh Ubuntu/WSL workstation this is usually:
+
+```bash
+sudo apt-get update && sudo apt-get install -y python3.12-dev python3.12-venv build-essential ffmpeg git
+```
+
+The local engine is quality-first and slower than a mock path. It runs vocal
+separation and Whisper word timestamps by default, then feeds the existing
+LouvorJA slide planner/exporter.
+
+## Setup On macOS With Titan
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
+pip install -e ../titan-chordpro-lib[mac]
 ```
 
-The real Titan pipeline is supported on macOS Apple Silicon. This WSL/Linux
-workspace can run the local packaging tests, but should not be treated as a real
-MP3/MP4 transcription environment.
+`--engine auto` uses Titan on macOS. Use `--engine titan` to force it from any
+platform where the dependency is installed.
 
 ## Usage
 
@@ -22,11 +40,23 @@ python audio_to_slja.py song.mp3 --title "Song" --output song.slja
 python audio_to_slja.py video.mp4 --title "Song" --output song.slja
 ```
 
-Useful smoke test without ML:
+Engine overrides:
 
 ```bash
-python audio_to_slja.py song.mp3 --device mock --output song.slja
+python audio_to_slja.py song.mp3 --engine local --whisper-model medium --output song.slja
+python audio_to_slja.py song.mp3 --engine titan --device mps --output song.slja
+python audio_to_slja.py song.mp3 --engine titan --device mock --output song.slja
 ```
+
+The local engine defaults to `--vocal-separation htdemucs_ft` and
+`--alignment none`. `--alignment mms` is available behind the alignment contract,
+but requires a wired MMS/torchaudio implementation in the environment.
+
+Generated output is checked by a quality gate before the archive is written.
+The default is `--quality-gate fail`, which rejects suspicious output such as
+too much essential lyric text in `letra_aux`, long main lines, or weak local
+word timestamps. Use `--quality-gate warn` to write the archive while preserving
+the diagnostics, or `--quality-gate off` only for low-level debugging.
 
 The generated `.slja` archive contains:
 
