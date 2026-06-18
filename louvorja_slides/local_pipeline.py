@@ -11,6 +11,7 @@ from louvorja_slides.cache import audio_sha256, cache_key, cache_path, load_json
 from louvorja_slides.separation import separate_vocals
 from louvorja_slides.transcription import (
     QUALITY_WHISPER_KWARGS,
+    TRANSCRIPTION_FILTER_REVISION,
     LocalWhisperTranscriber,
     Transcript,
 )
@@ -148,6 +149,7 @@ def _variant(**values: object) -> str:
         {
             "schema": _CACHE_SCHEMA_VERSION,
             "sample_rate": 16000,
+            "transcription_filter_revision": TRANSCRIPTION_FILTER_REVISION,
             **{f"whisper_{key}": value for key, value in QUALITY_WHISPER_KWARGS.items()},
             **values,
         }

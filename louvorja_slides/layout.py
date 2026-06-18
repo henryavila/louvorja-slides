@@ -48,6 +48,8 @@ class LyricWord:
     text: str
     start: float
     end: float
+    line_index: int | None = None
+    section_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,7 @@ class _LayoutCandidate:
     lines: tuple[str, ...]
     aux_text: str
     score: float
+    overlong: bool = False
 
 
 def plan_lyric_slides(
@@ -81,8 +84,13 @@ def plan_lyric_slides(
         strong_boundary = _first_strong_boundary(lyric_words, index, cfg)
         if strong_boundary is not None:
             candidate = _layout_segment(lyric_words[index : strong_boundary + 1], cfg)
-            if candidate is not None:
-                slides.append(_slide_from_candidate(lyric_words[index : strong_boundary + 1], candidate))
+            if candidate is not None and not candidate.overlong:
+                slides.append(
+                    _slide_from_candidate(
+                        lyric_words[index : strong_boundary + 1],
+                        candidate,
+                    )
+                )
                 index = strong_boundary + 1
                 continue
 
@@ -156,6 +164,8 @@ def _first_strong_boundary(
     cfg: LayoutConfig,
 ) -> int | None:
     for index in range(start, len(words) - 1):
+        if _section_boundary_after(words, index):
+            return index
         if words[index + 1].start - words[index].end >= cfg.min_transition_gap:
             return index
     return None
@@ -167,18 +177,38 @@ def _longest_layout(
     cfg: LayoutConfig,
 ) -> tuple[int, _LayoutCandidate]:
     viable: list[tuple[int, _LayoutCandidate]] = []
+    has_source_lines = _has_source_line_hints(words[start:])
+    has_musical_boundaries = _has_musical_boundaries(words, start, cfg)
     for end in range(start, len(words)):
-        candidate = _layout_segment(words[start : end + 1], cfg)
+        segment = words[start : end + 1]
+        if has_source_lines:
+            if end < len(words) - 1 and not _source_boundary_after(words, end):
+                continue
+            if _source_line_count(segment) > cfg.max_lines_per_slide:
+                continue
+        elif (
+            has_musical_boundaries
+            and end < len(words) - 1
+            and not _musical_boundary_after(words, end, cfg)
+        ):
+            continue
+        candidate = _layout_segment(segment, cfg)
         if candidate is not None:
             viable.append((end, candidate))
 
     if viable:
+        non_overlong = [item for item in viable if not item[1].overlong]
+        candidates = non_overlong
+        if not candidates and (has_source_lines or has_musical_boundaries):
+            candidates = _relaxed_non_overlong_layouts(words, start, cfg)
+        candidates = candidates or viable
+
         duration_ok = [
             item
-            for item in viable
+            for item in candidates
             if _duration_ok(words, start, item[0], cfg)
         ]
-        candidates = duration_ok or viable
+        candidates = duration_ok or candidates
         best_bucket = min(
             _candidate_bucket(words, start, end, candidate, cfg)
             for end, candidate in candidates
@@ -192,6 +222,30 @@ def _longest_layout(
 
     word = words[start]
     return start, _LayoutCandidate(lines=(word.text,), aux_text="", score=0.0)
+
+
+def _relaxed_non_overlong_layouts(
+    words: list[LyricWord],
+    start: int,
+    cfg: LayoutConfig,
+) -> list[tuple[int, _LayoutCandidate]]:
+    viable: list[tuple[int, _LayoutCandidate]] = []
+    max_fittable_chars = _max_fittable_segment_chars(cfg)
+    for end in range(start, len(words)):
+        if len(_join(words[start : end + 1])) > max_fittable_chars:
+            break
+        candidate = _layout_segment(words[start : end + 1], cfg)
+        if candidate is not None and not candidate.overlong:
+            viable.append((end, candidate))
+    return viable
+
+
+def _max_fittable_segment_chars(cfg: LayoutConfig) -> int:
+    main_text_chars = cfg.hard_max_chars_per_line * cfg.max_lines_per_slide
+    main_text_chars += max(0, cfg.max_lines_per_slide - 1)
+    if not cfg.allow_auxiliary:
+        return main_text_chars
+    return main_text_chars + 1 + cfg.auxiliary_max_chars
 
 
 def _candidate_bucket(
@@ -219,6 +273,8 @@ def _is_natural_segment_end(
 ) -> bool:
     if end == len(words) - 1:
         return True
+    if _source_boundary_after(words, end):
+        return True
     if _ends_sentence(words[end].text):
         return True
     if words[end + 1].start - words[end].end >= cfg.phrase_pause_seconds:
@@ -242,12 +298,18 @@ def _layout_segment(words: list[LyricWord], cfg: LayoutConfig) -> _LayoutCandida
         return _LayoutCandidate(lines=(full_text,), aux_text="", score=_line_score(words, cfg))
 
     candidates: list[_LayoutCandidate] = []
-    if len(full_text) <= cfg.hard_max_chars_per_line:
+    if (
+        len(full_text) <= cfg.hard_max_chars_per_line
+        and _source_line_count(words) <= 1
+    ):
+        score = _length_over_target(len(full_text), cfg)
+        if len(full_text) <= cfg.target_max_chars_per_line:
+            score -= 12.0
         candidates.append(
             _LayoutCandidate(
                 lines=(full_text,),
                 aux_text="",
-                score=_length_over_target(len(full_text), cfg) - 12.0,
+                score=score,
             )
         )
 
@@ -303,7 +365,8 @@ def _layout_segment(words: list[LyricWord], cfg: LayoutConfig) -> _LayoutCandida
             candidates.append(aux_candidate)
 
     if not candidates:
-        return None
+        return _overlong_layout(words, cfg)
+
     return min(candidates, key=lambda candidate: candidate.score)
 
 
@@ -313,12 +376,11 @@ def _auxiliary_layout(
     cfg: LayoutConfig,
 ) -> _LayoutCandidate | None:
     split_pairs: list[tuple[int, int]] = []
-    if len(natural_splits) >= 2:
+    if natural_splits:
         split_pairs = [
             (first, second)
-            for first in natural_splits
             for second in natural_splits
-            if first < second
+            for first in range(0, second)
         ]
     else:
         split_pairs = [
@@ -358,15 +420,66 @@ def _auxiliary_layout(
     return min(candidates, key=lambda candidate: candidate.score)
 
 
+def _overlong_layout(words: list[LyricWord], cfg: LayoutConfig) -> _LayoutCandidate:
+    full_text = _join(words)
+    if cfg.max_lines_per_slide < 2 or len(words) == 1:
+        return _LayoutCandidate(
+            lines=(full_text,),
+            aux_text="",
+            score=1000.0 + _length_over_target(len(full_text), cfg),
+            overlong=True,
+        )
+
+    candidates: list[_LayoutCandidate] = []
+    for split_index in range(0, len(words) - 1):
+        first = words[: split_index + 1]
+        second = words[split_index + 1 :]
+        first_text = _join(first)
+        second_text = _join(second)
+        longest_line = max(len(first_text), len(second_text))
+        score = 1000.0 + longest_line * 2.0
+        score += abs(len(first_text) - len(second_text)) * 0.2
+        score += _line_score(first, cfg)
+        candidates.append(
+            _LayoutCandidate(
+                lines=(first_text, second_text),
+                aux_text="",
+                score=score,
+                overlong=True,
+            )
+        )
+    return min(candidates, key=lambda candidate: candidate.score)
+
+
 def _natural_split_indices(words: list[LyricWord], cfg: LayoutConfig) -> list[int]:
     result: list[int] = []
     for index in range(0, len(words) - 1):
-        if _ends_sentence(words[index].text):
-            result.append(index)
-            continue
-        if words[index + 1].start - words[index].end >= cfg.phrase_pause_seconds:
+        if _musical_boundary_after(words, index, cfg):
             result.append(index)
     return result
+
+
+def _has_musical_boundaries(
+    words: list[LyricWord],
+    start: int,
+    cfg: LayoutConfig,
+) -> bool:
+    return any(
+        _musical_boundary_after(words, index, cfg)
+        for index in range(start, len(words) - 1)
+    )
+
+
+def _musical_boundary_after(
+    words: list[LyricWord],
+    index: int,
+    cfg: LayoutConfig,
+) -> bool:
+    if _source_boundary_after(words, index):
+        return True
+    if _ends_sentence(words[index].text):
+        return True
+    return words[index + 1].start - words[index].end >= cfg.phrase_pause_seconds
 
 
 def _slide_from_candidate(words: list[LyricWord], candidate: _LayoutCandidate) -> SlidePlan:
@@ -387,6 +500,10 @@ def _split_score(first: list[LyricWord], second: list[LyricWord], cfg: LayoutCon
     score += _line_score(first, cfg)
     if _is_weak_break_word(first[-1].text, cfg):
         score += 25.0
+    if _section_boundary_between(first[-1], second[0]):
+        score -= 10.0
+    elif _line_boundary_between(first[-1], second[0]):
+        score -= 7.0
     if _ends_sentence(first[-1].text):
         score -= 8.0
     elif second[0].start - first[-1].end >= cfg.phrase_pause_seconds:
@@ -410,6 +527,43 @@ def _is_weak_break_word(text: str, cfg: LayoutConfig) -> bool:
 
 def _ends_sentence(text: str) -> bool:
     return text.rstrip().endswith((".", ",", ";", ":", "!", "?", "..."))
+
+
+def _source_boundary_after(words: list[LyricWord], index: int) -> bool:
+    return _section_boundary_after(words, index) or _line_boundary_after(words, index)
+
+
+def _section_boundary_after(words: list[LyricWord], index: int) -> bool:
+    return _section_boundary_between(words[index], words[index + 1])
+
+
+def _line_boundary_after(words: list[LyricWord], index: int) -> bool:
+    return _line_boundary_between(words[index], words[index + 1])
+
+
+def _section_boundary_between(left: LyricWord, right: LyricWord) -> bool:
+    return (
+        left.section_index is not None
+        and right.section_index is not None
+        and left.section_index != right.section_index
+    )
+
+
+def _line_boundary_between(left: LyricWord, right: LyricWord) -> bool:
+    return (
+        left.line_index is not None
+        and right.line_index is not None
+        and left.line_index != right.line_index
+    )
+
+
+def _has_source_line_hints(words: list[LyricWord]) -> bool:
+    return any(word.line_index is not None for word in words)
+
+
+def _source_line_count(words: list[LyricWord]) -> int:
+    hinted = {word.line_index for word in words if word.line_index is not None}
+    return len(hinted) if hinted else 0
 
 
 def _normalize_word(text: str) -> str:

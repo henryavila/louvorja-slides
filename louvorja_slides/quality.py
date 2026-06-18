@@ -30,6 +30,7 @@ class QualityThresholds:
     max_zero_duration_word_ratio: float = 0.02
     min_positive_gap_ratio: float = 0.05
     min_gap_seconds: float = 0.05
+    min_lyrics_alignment_coverage: float = 0.80
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,21 @@ class TranscriptQualityReport:
     @property
     def positive_gap_ratio(self) -> float:
         return self.positive_gap_count / self.boundary_count if self.boundary_count else 1.0
+
+
+@dataclass(frozen=True)
+class LyricsAlignmentQualityReport:
+    lyric_word_count: int
+    alignable_lyric_word_count: int
+    matched_word_count: int
+    coverage: float
+    unmatched_lyric_spans: tuple[str, ...] = field(default_factory=tuple)
+    unmatched_asr_spans: tuple[str, ...] = field(default_factory=tuple)
+    messages: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def acceptable(self) -> bool:
+        return not self.messages
 
 
 def analyze_slide_quality(
@@ -232,10 +248,62 @@ def analyze_transcript_quality(
     )
 
 
+def analyze_lyrics_alignment_quality(
+    alignment_report: object,
+    thresholds: QualityThresholds | None = None,
+) -> LyricsAlignmentQualityReport:
+    cfg = thresholds or QualityThresholds()
+    lyric_word_count = int(getattr(alignment_report, "lyric_word_count", 0))
+    alignable_lyric_word_count = int(
+        getattr(alignment_report, "alignable_lyric_word_count", lyric_word_count)
+    )
+    matched_word_count = int(getattr(alignment_report, "matched_word_count", 0))
+    coverage = float(
+        getattr(
+            alignment_report,
+            "coverage",
+            matched_word_count / alignable_lyric_word_count
+            if alignable_lyric_word_count
+            else 0.0,
+        )
+    )
+    unmatched_lyric_spans = tuple(
+        str(item) for item in getattr(alignment_report, "unmatched_lyric_spans", ())
+    )
+    unmatched_asr_spans = tuple(
+        str(item) for item in getattr(alignment_report, "unmatched_asr_spans", ())
+    )
+
+    messages: list[str] = []
+    if alignable_lyric_word_count == 0:
+        messages.append("no alignable lyric words were provided")
+    elif coverage < cfg.min_lyrics_alignment_coverage:
+        detail = (
+            "lyrics alignment coverage "
+            f"{coverage:.1%} is below {cfg.min_lyrics_alignment_coverage:.1%}"
+        )
+        if unmatched_lyric_spans:
+            detail += f"; unmatched lyrics: {', '.join(unmatched_lyric_spans[:3])}"
+        if unmatched_asr_spans:
+            detail += f"; unmatched ASR: {', '.join(unmatched_asr_spans[:3])}"
+        messages.append(detail)
+
+    return LyricsAlignmentQualityReport(
+        lyric_word_count=lyric_word_count,
+        alignable_lyric_word_count=alignable_lyric_word_count,
+        matched_word_count=matched_word_count,
+        coverage=coverage,
+        unmatched_lyric_spans=unmatched_lyric_spans,
+        unmatched_asr_spans=unmatched_asr_spans,
+        messages=tuple(messages),
+    )
+
+
 def enforce_quality(
     *,
     slides: Iterable[Slide],
     transcript: Transcript | None = None,
+    lyrics_alignment: object | None = None,
     mode: str = "fail",
     thresholds: QualityThresholds | None = None,
     stream: TextIO | None = None,
@@ -247,9 +315,16 @@ def enforce_quality(
     transcript_report = (
         analyze_transcript_quality(transcript, thresholds) if transcript is not None else None
     )
+    lyrics_alignment_report = (
+        analyze_lyrics_alignment_quality(lyrics_alignment, thresholds)
+        if lyrics_alignment is not None
+        else None
+    )
     reports: list[tuple[str, tuple[str, ...]]] = [("slides", slide_report.messages)]
     if transcript_report is not None:
         reports.append(("transcript", transcript_report.messages))
+    if lyrics_alignment_report is not None:
+        reports.append(("lyrics", lyrics_alignment_report.messages))
 
     messages = [
         f"{name}: {message}"

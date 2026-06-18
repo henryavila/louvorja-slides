@@ -9,6 +9,9 @@ _LOGGER = logging.getLogger(__name__)
 
 _WHISPER_SPECIAL_TOKEN_RE = re.compile(r"^\s*\[[^\[\]]*\]\s*$")
 
+# Bump when transcript filtering changes for identical Whisper output.
+TRANSCRIPTION_FILTER_REVISION = 2
+
 # Single source of truth for the quality-tuned whisper.cpp arguments. The
 # transcript cache key derives from this mapping, so editing a value here
 # invalidates stale cached transcripts automatically.
@@ -180,7 +183,7 @@ class LocalWhisperTranscriber:
         words: list[TranscribedWord] = []
         for segment in segments:
             text = str(getattr(segment, "text", "")).strip()
-            if not text or _WHISPER_SPECIAL_TOKEN_RE.match(text):
+            if not text or _WHISPER_SPECIAL_TOKEN_RE.match(text) or not _has_lyric_text(text):
                 continue
 
             start = float(getattr(segment, "t0")) / 100.0
@@ -226,3 +229,7 @@ class LocalWhisperTranscriber:
                 "dependencies before running audio transcription."
             ) from exc
         return Model(model=model_id)
+
+
+def _has_lyric_text(text: str) -> bool:
+    return any(character.isalnum() for character in text)

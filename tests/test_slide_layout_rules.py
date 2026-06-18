@@ -59,6 +59,39 @@ class SlideLayoutRulesTest(unittest.TestCase):
         self.assertTrue(slides)
         self.assertTrue(all(len(slide.lines) == 1 for slide in slides))
 
+    def test_source_phrase_lines_are_not_merged_past_slide_line_limit(self) -> None:
+        words = [
+            LyricWord("Aaa", 0.0, 0.4, line_index=0),
+            LyricWord("bbb", 0.4, 0.8, line_index=0),
+            LyricWord("Ccc", 0.8, 1.2, line_index=1),
+            LyricWord("ddd", 1.2, 1.6, line_index=1),
+            LyricWord("Eee", 1.6, 2.0, line_index=2),
+            LyricWord("fff", 2.0, 2.4, line_index=2),
+        ]
+
+        slides = plan_lyric_slides(words)
+
+        self.assertEqual(
+            [slide.lines for slide in slides],
+            [("Aaa bbb", "Ccc ddd"), ("Eee fff",)],
+        )
+
+    def test_long_single_source_phrase_can_wrap_inside_slide(self) -> None:
+        words = [
+            LyricWord("E", 0.0, 0.2, line_index=0),
+            LyricWord("ao", 0.2, 0.4, line_index=0),
+            LyricWord("olhar", 0.4, 0.8, line_index=0),
+            LyricWord("pra", 0.8, 1.0, line_index=0),
+            LyricWord("cruz", 1.0, 1.3, line_index=0),
+            LyricWord("eu", 1.3, 1.5, line_index=0),
+            LyricWord("entendo", 1.5, 2.0, line_index=0),
+            LyricWord("amor", 2.0, 2.4, line_index=0),
+        ]
+
+        slides = plan_lyric_slides(words)
+
+        self.assertEqual(slides[0].lines, ("E ao olhar pra cruz", "eu entendo amor"))
+
     def test_line_break_does_not_end_on_weak_word(self) -> None:
         words = words_from_text("Toma Teu lugar de honra Queremos Tua Presenca aqui")
 
@@ -100,7 +133,108 @@ class SlideLayoutRulesTest(unittest.TestCase):
 
         slides = plan_lyric_slides(words)
 
-        self.assertEqual([slide.lines for slide in slides], [("E tudo vai ficar bem",), ("tudo acaba bem No final no final",)])
+        self.assertEqual(
+            [slide.lines for slide in slides],
+            [("E tudo vai ficar bem",), ("tudo acaba bem", "No final no final")],
+        )
+
+    def test_strong_boundary_region_with_many_source_lines_is_split(self) -> None:
+        line_texts = [
+            "alfa beta gama delta",
+            "bravo canto claro dia",
+            "eco firme gloria hoje",
+            "justo lume monte novo",
+            "povo quieto rumo santo",
+            "terra unica vida zelo",
+        ]
+        words: list[LyricWord] = []
+        cursor = 0.0
+        for line_index, line_text in enumerate(line_texts):
+            for token in line_text.split():
+                start = cursor
+                end = start + 0.3
+                words.append(
+                    LyricWord(token, start, end, line_index=line_index)
+                )
+                cursor = end + 0.1
+        cursor += 4.0
+        words.append(LyricWord("final", cursor, cursor + 0.3, line_index=len(line_texts)))
+
+        slides = plan_lyric_slides(words)
+
+        self.assertGreater(len(slides), 2)
+        self.assertEqual(slides[-1].lines, ("final",))
+        self.assertTrue(
+            all(
+                len(line) <= LayoutConfig().hard_max_chars_per_line
+                for slide in slides
+                for line in slide.lines
+            )
+        )
+
+    def test_pause_delimited_phrase_is_not_split_between_slides(self) -> None:
+        words = words_from_text(
+            (
+                "Santo es Senhor da minha vida agora e para sempre tua luz me guia "
+                "Tudo entrego no altar do meu coracao"
+            ),
+            gap_after={1: 0.8, 13: 0.8},
+        )
+
+        slides = plan_lyric_slides(words)
+
+        self.assertEqual(
+            [slide.lines for slide in slides],
+            [
+                ("Santo es",),
+                ("Senhor da minha vida agora", "e para sempre tua luz me guia"),
+                ("Tudo entrego no altar", "do meu coracao"),
+            ],
+        )
+
+    def test_auxiliary_text_starts_at_phrase_boundary(self) -> None:
+        words = words_from_text(
+            "Santo es Senhor da minha vida agora e para sempre tua luz me guia Tudo entrego",
+            gap_after={1: 0.8, 13: 0.8},
+        )
+
+        slides = plan_lyric_slides(words)
+
+        self.assertEqual(
+            slides,
+            [
+                SlidePlan(lines=("Santo es",), start_seconds=0.0, end_seconds=1.0),
+                SlidePlan(
+                    lines=("Senhor da minha vida agora", "e para sempre tua luz me guia"),
+                    start_seconds=1.8,
+                    end_seconds=9.6,
+                    aux_text="Tudo entrego",
+                ),
+            ],
+        )
+
+    def test_overlong_pause_delimited_phrase_splits_before_hard_limit(self) -> None:
+        long_phrase = (
+            "Senhor da minha vida agora e para sempre tua luz me guia "
+            "pelos vales e montanhas ate o fim"
+        )
+        words = words_from_text(
+            f"Gloria a ti {long_phrase} Tudo entrego",
+            gap_after={2: 0.8, 21: 0.8},
+        )
+
+        slides = plan_lyric_slides(words)
+
+        self.assertEqual(slides[0].lines, ("Gloria a ti",))
+        self.assertGreater(len(slides), 2)
+        self.assertTrue(
+            all(
+                len(line) <= LayoutConfig().hard_max_chars_per_line
+                for slide in slides
+                for line in slide.lines
+            )
+        )
+        self.assertIn("Tudo entrego", " ".join(" ".join(slide.lines) for slide in slides))
 
     def test_does_not_create_fast_one_line_slide_transition(self) -> None:
         words = words_from_text(

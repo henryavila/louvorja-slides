@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import re
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,14 +83,28 @@ def extract_lyric_slides(doc: Any, lines_per_slide: int = 2) -> list[Slide]:
         raise ValueError("lines_per_slide must be <= 2")
 
     lyric_words: list[LyricWord] = []
-    for section in getattr(doc, "sections", []):
+    for section_index, section in enumerate(getattr(doc, "sections", [])):
         for line in getattr(section, "lines", []):
             if getattr(line, "line_type", None) != "lyric":
                 continue
             text = _clean_lja_value(getattr(line, "text", ""))
             if not text:
                 continue
-            lyric_words.extend(_line_words(line, section, text))
+            raw_line_index = getattr(line, "source_line_index", None)
+            line_index = int(raw_line_index) if raw_line_index is not None else None
+            raw_section_index = getattr(line, "source_section_index", None)
+            source_section_index = (
+                int(raw_section_index) if raw_section_index is not None else None
+            )
+            lyric_words.extend(
+                _line_words(
+                    line,
+                    section,
+                    text,
+                    line_index=line_index,
+                    section_index=source_section_index,
+                )
+            )
 
     if not lyric_words:
         return []
@@ -118,7 +134,8 @@ def render_lja(
         "[Geral]",
         f"slides={len(slide_list) + 1}",
         f"versao={version}",
-        f"audio={audio_member}",
+        f"url_musica={audio_member}",
+        "audio=1",
         "",
     ]
 
@@ -235,7 +252,14 @@ def _line_start_seconds(line: Any, section: Any) -> float:
     return 0.0
 
 
-def _line_words(line: Any, section: Any, text: str) -> list[LyricWord]:
+def _line_words(
+    line: Any,
+    section: Any,
+    text: str,
+    *,
+    line_index: int | None = None,
+    section_index: int | None = None,
+) -> list[LyricWord]:
     aligned = list(getattr(line, "word_alignments", []) or [])
     text_parts = text.split()
     if aligned and len(aligned) >= len(text_parts):
@@ -248,14 +272,28 @@ def _line_words(line: Any, section: Any, text: str) -> list[LyricWord]:
                 LyricWord(
                     text=word_text,
                     start=float(getattr(word.timestamp, "start", 0.0)),
-                    end=float(getattr(word.timestamp, "end", getattr(word.timestamp, "start", 0.0))),
+                    end=float(
+                        getattr(
+                            word.timestamp,
+                            "end",
+                            getattr(word.timestamp, "start", 0.0),
+                        )
+                    ),
+                    line_index=line_index,
+                    section_index=section_index,
                 )
             )
         return words
 
     start = _line_start_seconds(line, section)
     return [
-        LyricWord(text=part, start=start + idx * 0.5, end=start + idx * 0.5 + 0.4)
+        LyricWord(
+            text=part,
+            start=start + idx * 0.5,
+            end=start + idx * 0.5 + 0.4,
+            line_index=line_index,
+            section_index=section_index,
+        )
         for idx, part in enumerate(text_parts)
     ]
 
@@ -298,8 +336,20 @@ def _parse_lja_timestamp(value: str, tick_rate: float) -> float:
 
 
 def _safe_archive_filename(filename: str) -> str:
-    cleaned = filename.replace("/", "_").replace("\\", "_").strip()
-    return cleaned or "audio.mp3"
+    raw = filename.replace("/", "_").replace("\\", "_").strip()
+    if not raw:
+        return "audio.mp3"
+
+    path = Path(raw)
+    suffix = path.suffix if path.suffix else ".mp3"
+    stem = path.stem if path.stem else "audio"
+    ascii_stem = (
+        unicodedata.normalize("NFKD", stem)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+    cleaned_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", ascii_stem).strip("._-")
+    return f"{cleaned_stem or 'audio'}{suffix}"
 
 
 def _audio_member_name(audio_name: str) -> str:
