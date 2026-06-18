@@ -10,6 +10,7 @@ from louvorja_slides.slja import (
     Slide,
     extract_lyric_slides,
     format_timestamp,
+    read_slja,
     render_lja,
     write_slja,
 )
@@ -153,6 +154,48 @@ class SljaExporterTest(unittest.TestCase):
             self.assertIn("letra=Fala comigo\r\n", text)
             self.assertIn("imagem=imagens\\Capa.jpg\r\n", text)
             self.assertIn("imagem=imagens\\slides.jpg\r\n", text)
+
+    def test_read_slja_parses_legacy_numeric_tempo_and_empty_lyric_slide(self) -> None:
+        lja = "\r\n".join(
+            [
+                "[Geral]",
+                "slides=3",
+                "url_musica=audio\\song.mp3",
+                "",
+                "[Slide:1]",
+                "tipo=CAPA",
+                "letra=Titulo",
+                "tempo=0",
+                "",
+                "[Slide:2]",
+                "tipo=LETRA",
+                "letra=Primeira linha|Segunda linha",
+                "tempo=576000",
+                "",
+                "[Slide:3]",
+                "tipo=LETRA",
+                "letra=",
+                "tempo=960000",
+                "",
+            ]
+        ).encode("cp1252")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / "song.slja"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("slides.lja", lja)
+
+            archive = read_slja(archive_path)
+
+        self.assertEqual(archive.title, "Titulo")
+        self.assertEqual(archive.audio_member, "audio\\song.mp3")
+        self.assertEqual(
+            archive.slides,
+            (
+                Slide(lines=("Primeira linha", "Segunda linha"), start_seconds=3.0),
+                Slide(lines=(), start_seconds=5.0),
+            ),
+        )
 
 
 if __name__ == "__main__":

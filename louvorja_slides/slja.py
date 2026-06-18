@@ -27,12 +27,51 @@ class Slide:
     aux_text: str = ""
 
 
+@dataclass(frozen=True)
+class SljaArchive:
+    title: str
+    audio_member: str
+    slides: tuple[Slide, ...]
+
+
 def format_timestamp(seconds: float) -> str:
     total_seconds = max(0, math.floor(seconds))
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
     secs = total_seconds % 60
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def read_slja(path: Path, *, tick_rate: float = 192000.0) -> SljaArchive:
+    """Read lyric slides from an existing LouvorJA archive."""
+    with zipfile.ZipFile(path) as archive:
+        text = archive.read("slides.lja").decode("cp1252", errors="replace")
+
+    sections = _parse_lja_sections(text)
+    geral = next((section for section in sections if section["name"] == "Geral"), {})
+    title = ""
+    slides: list[Slide] = []
+    for section in sections:
+        name = section["name"]
+        if not name.startswith("Slide:"):
+            continue
+        if section.get("tipo") == "CAPA":
+            title = section.get("letra", "")
+            continue
+        if section.get("tipo") != "LETRA":
+            continue
+        raw_text = section.get("letra", "")
+        lines = tuple(part.strip() for part in raw_text.split("|") if part.strip())
+        slides.append(
+            Slide(
+                lines=lines,
+                start_seconds=_parse_lja_timestamp(section.get("tempo", "0"), tick_rate),
+                aux_text=section.get("letra_aux", "").strip(),
+            )
+        )
+
+    audio_member = geral.get("url_musica") or geral.get("audio") or ""
+    return SljaArchive(title=title, audio_member=audio_member, slides=tuple(slides))
 
 
 def extract_lyric_slides(doc: Any, lines_per_slide: int = 2) -> list[Slide]:
@@ -223,6 +262,39 @@ def _line_words(line: Any, section: Any, text: str) -> list[LyricWord]:
 
 def _clean_lja_value(value: str) -> str:
     return " ".join(str(value).replace("|", " ").split())
+
+
+def _parse_lja_sections(text: str) -> list[dict[str, str]]:
+    sections: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip("\ufeff").strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = {"name": line[1:-1]}
+            sections.append(current)
+            continue
+        if current is None or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        current[key.strip()] = value.strip()
+    return sections
+
+
+def _parse_lja_timestamp(value: str, tick_rate: float) -> float:
+    raw = value.strip()
+    if ":" in raw:
+        parts = [int(part) for part in raw.split(":")]
+        if len(parts) != 3:
+            raise ValueError(f"invalid LouvorJA timestamp: {value!r}")
+        return float(parts[0] * 3600 + parts[1] * 60 + parts[2])
+    if not raw:
+        return 0.0
+    numeric = int(raw)
+    if numeric > 10_000:
+        return numeric / tick_rate
+    return float(numeric)
 
 
 def _safe_archive_filename(filename: str) -> str:

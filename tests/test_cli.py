@@ -186,6 +186,52 @@ class CliTest(unittest.TestCase):
         self.assertEqual(writes, [output_path])
         self.assertIn("quality gate failed", stderr.getvalue())
 
+    def test_main_validates_existing_slja_without_transcribing(self) -> None:
+        lja = "\r\n".join(
+            [
+                "[Geral]",
+                "slides=3",
+                "url_musica=audio\\song.mp3",
+                "",
+                "[Slide:1]",
+                "tipo=CAPA",
+                "letra=Titulo",
+                "tempo=0",
+                "",
+                "[Slide:2]",
+                "tipo=LETRA",
+                "letra=Declarado guerra contra o enganador",
+                "tempo=576000",
+                "",
+                "[Slide:3]",
+                "tipo=LETRA",
+                "letra=",
+                "tempo=960000",
+                "",
+            ]
+        ).encode("cp1252")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / "song.slja"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("slides.lja", lja)
+            stdout = StringIO()
+            stderr = StringIO()
+
+            with (
+                patch("audio_to_slja.select_engine") as select_engine,
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                exit_code = audio_to_slja.main(
+                    [str(archive_path), "--quality-gate", "warn"]
+                )
+
+        self.assertEqual(exit_code, 0)
+        select_engine.assert_not_called()
+        self.assertIn("SLJA quality:", stdout.getvalue())
+        self.assertIn("quality gate failed", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

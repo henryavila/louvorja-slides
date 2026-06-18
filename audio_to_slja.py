@@ -8,24 +8,28 @@ from typing import Any
 
 from louvorja_slides.engines import AudioToDocumentConfig, select_engine
 from louvorja_slides.quality import enforce_quality
-from louvorja_slides.slja import extract_lyric_slides, write_slja
+from louvorja_slides.slja import extract_lyric_slides, read_slja, write_slja
 
 SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".mp4"}
+SUPPORTED_INPUT_EXTENSIONS = SUPPORTED_AUDIO_EXTENSIONS | {".slja"}
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate a LouvorJA .slja archive from a local MP3/MP4 audio file."
+        description=(
+            "Generate a LouvorJA .slja archive from local MP3/MP4 audio, "
+            "or validate an existing .slja archive."
+        )
     )
-    parser.add_argument("audio", type=Path, help="Input .mp3 or .mp4 file")
+    parser.add_argument("audio", type=Path, help="Input .mp3, .mp4, or .slja file")
     parser.add_argument("--output", type=Path, default=None, help="Output .slja path")
     parser.add_argument("--title", default=None, help="Song title for the cover slide")
     parser.add_argument("--language", default="pt", help="Transcription language code")
     parser.add_argument(
         "--engine",
-        choices=("auto", "local", "titan"),
+        choices=("auto", "local"),
         default="auto",
-        help="Transcription engine. auto uses Titan on macOS and local ML on Linux/WSL.",
+        help="Transcription engine. auto uses the local ML pipeline on every OS.",
     )
     parser.add_argument(
         "--lines-per-slide",
@@ -35,12 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--device",
-        choices=("auto", "mps", "cuda", "cpu", "mock"),
+        choices=("auto", "mps", "cuda", "cpu"),
         default="auto",
-        help=(
-            "Backend preference. 'mock' is Titan-only (packaging smoke tests); "
-            "on the local engine, cpu/cuda select the forced-alignment device."
-        ),
+        help="Backend preference for local forced alignment.",
     )
     parser.add_argument(
         "--whisper-model",
@@ -53,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--cache-dir",
         type=Path,
         default=Path(".louvorja-cache"),
-        help="Local/Titan stage cache directory",
+        help="Local stage cache directory",
     )
     parser.add_argument(
         "--vocal-separation",
@@ -91,12 +92,26 @@ def run(args: argparse.Namespace) -> int:
     audio_path = Path(args.audio)
     if not audio_path.exists():
         raise FileNotFoundError(f"audio file not found: {audio_path}")
-    if audio_path.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS:
-        allowed = ", ".join(sorted(SUPPORTED_AUDIO_EXTENSIONS))
+    if audio_path.suffix.lower() not in SUPPORTED_INPUT_EXTENSIONS:
+        allowed = ", ".join(sorted(SUPPORTED_INPUT_EXTENSIONS))
         raise ValueError(f"unsupported audio extension {audio_path.suffix!r}; expected {allowed}")
+    if audio_path.suffix.lower() == ".slja":
+        archive = read_slja(audio_path)
+        slide_report, _transcript_report = enforce_quality(
+            slides=archive.slides,
+            mode=args.quality_gate,
+        )
+        print(
+            "SLJA quality: "
+            f"{slide_report.slide_count} lyric slides, "
+            f"{slide_report.empty_slide_count} empty, "
+            f"{slide_report.over_hard_line_count} over hard line limit, "
+            f"{slide_report.fast_transition_count}/{slide_report.transition_count} fast transitions"
+        )
+        return 0
 
-    force_mock = args.device == "mock"
-    backend = args.device if args.device not in ("auto", "mock") else None
+    force_mock = False
+    backend = args.device if args.device != "auto" else None
 
     engine = select_engine(args.engine)
     doc = engine.transcribe(
