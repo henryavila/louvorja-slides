@@ -5,9 +5,10 @@
 - This project generates LouvorJA `.slja` archives from local `.mp3` or `.mp4`
   audio files.
 - Audio transcription now goes through an engine contract. `auto` selects the
-  local engine on Linux/WSL and the Titan engine on macOS.
-- `titan-chordpro-lib` remains an optional macOS engine dependency. The
-  LouvorJA-specific export/layout code lives in this repository.
+  local engine on macOS, Linux, and WSL.
+- `titan-chordpro-lib` is reference-only. Do not add it as a runtime
+  dependency, import it, or call it from this project; copy/adapt only the
+  needed implementation ideas into this repository.
 - The local engine ports only the Titan decisions needed for slides: Whisper
   word timestamps, quality transcription arguments, bracket-token filtering,
   cache keys by quality configuration, and adaptive phrase grouping.
@@ -60,6 +61,39 @@
 
 ## Review Findings To Preserve
 
+- Status snapshot on 2026-06-17: `main` is clean at
+  `feat: harden local engine alignment, caching, and quality gate`. The repo has
+  the CLI, SLJA exporter, engine contract, local pipeline, MMS aligner, quality
+  gate, install script, smoke script, plans, and tests. There is no active
+  `.atomic-skills/PROJECT-STATUS.md`; `.atomic-skills/` currently contains only
+  review artifacts.
+- Verification snapshot on 2026-06-17: `python3 -m compileall audio_to_slja.py
+  louvorja_slides tests scripts` passes on the system Python. `python3 -m
+  unittest discover -s tests -v` finds 69 tests but errors on missing `numpy` in
+  the system Python and one `louvorja_slides.local_pipeline` patch/import path.
+  Re-run in the intended venv before treating the suite as green.
+- Production validation remains open: run a real song through `--alignment mms`
+  with `--quality-gate fail`, verify nonzero phonemes and mostly
+  `source="mms_align"` in the aligned cache, then compare slide quality metrics.
+- Status update on 2026-06-17: existing `.slja` archives can be read and
+  checked directly by the CLI. The `Eu sou Calebe - 2024.slja` reference fails
+  the new archive gate with 1 empty lyric slide, 1 line over the 34-char hard
+  limit, and 4/33 fast transitions.
+- Real macOS validation on 2026-06-17 used the audio extracted from
+  `Eu sou Calebe - 2024.slja` and a temporary Titan-reference run to compare
+  behavior. That run must not become a project dependency. The first generated
+  output failed because 16/18 lyric slides used `letra_aux`; after tightening
+  layout selection, `/tmp/eu-sou-calebe-generated-v5.slja` passed the gate with
+  27 lyric slides, 0 aux slides, 0 empty slides, 0 hard-limit lines, 0/26 fast
+  transitions, 3/54 lines over the 28-char target, and median line length 23.
+- Lyrics-first was already in
+  `docs/plans/2026-06-11-local-engine-quality-correction.md`; the actionable
+  handoff for the next session is
+  `docs/plans/2026-06-17-lyrics-first-handoff.md`.
+- Branch `feat/slja-quality-local-only` contains micro-commits for archive
+  validation, layout quality, and local-only runtime. Session handoff:
+  `docs/plans/2026-06-18-session-handoff.md`.
+
 - `LayoutConfig.max_lines_per_slide` must be enforced by the planner. The CLI
   exposes `--lines-per-slide`, so `lines_per_slide=1` cannot produce two-line
   slides.
@@ -111,7 +145,7 @@
 - Whisper quality kwargs live once in `QUALITY_WHISPER_KWARGS`
   (`transcription.py`); the transcript cache key derives from it, so editing
   the kwargs auto-invalidates stale transcripts.
-- The local engine rejects `--device mock` and `--device mps` with a clear
-  error; `cpu`/`cuda` select the MMS forced-alignment device.
+- The local engine rejects `--device mock`; `cpu`, `cuda`, and `mps` select the
+  MMS forced-alignment device when the local stack supports them.
 - The quality gate fails a run that produced zero lyric slides; empty-input
   ratios defaulting to 0.0 must not sail through the gate.
