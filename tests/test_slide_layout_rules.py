@@ -68,6 +68,18 @@ class SlideLayoutRulesTest(unittest.TestCase):
         self.assertNotRegex(first_line.lower(), r"\b(de|do|da|em|que|e|nao)$")
         self.assertEqual(first_line, "Toma Teu lugar de honra")
 
+    def test_duration_fallback_does_not_end_slide_on_weak_word(self) -> None:
+        words = words_from_text(
+            "Nossa missão é levantar o Santo nome do Senhor O Santo nome do Senhor Eu sou Calebe",
+            step=0.8,
+        )
+
+        slides = plan_lyric_slides(words)
+
+        for slide in slides[:-1]:
+            last_line = slide.lines[-1]
+            self.assertNotRegex(last_line.lower(), r"\b(o|a|de|do|da|em|que|e|nao)$")
+
     def test_allows_hard_limit_to_avoid_fast_slide_change(self) -> None:
         config = LayoutConfig(target_max_chars_per_line=20, hard_max_chars_per_line=34)
         words = words_from_text(
@@ -101,7 +113,19 @@ class SlideLayoutRulesTest(unittest.TestCase):
         self.assertEqual(len(slides), 1)
         self.assertEqual(slides[0].lines, ("Nao devemos parar", "nao devemos temer"))
 
-    def test_uses_auxiliary_text_only_as_overflow_fallback(self) -> None:
+    def test_short_auxiliary_text_can_remain_overflow_fallback(self) -> None:
+        words = words_from_text(
+            "Nao devemos parar nao devemos temer pela tua misericordia",
+            gap_after={2: 0.8, 5: 0.8},
+        )
+
+        slides = plan_lyric_slides(words)
+
+        self.assertEqual(len(slides), 1)
+        self.assertEqual(slides[0].lines, ("Nao devemos parar", "nao devemos temer"))
+        self.assertEqual(slides[0].aux_text, "pela tua misericordia")
+
+    def test_long_auxiliary_text_becomes_own_slide(self) -> None:
         words = words_from_text(
             "Nao devemos parar nao devemos temer porque o noivo vai chegar",
             gap_after={2: 0.8, 5: 0.8},
@@ -110,8 +134,8 @@ class SlideLayoutRulesTest(unittest.TestCase):
         slides = plan_lyric_slides(words)
 
         self.assertEqual(len(slides), 1)
-        self.assertEqual(slides[0].lines, ("Nao devemos parar", "nao devemos temer"))
-        self.assertEqual(slides[0].aux_text, "porque o noivo vai chegar")
+        self.assertEqual(slides[0].aux_text, "")
+        self.assertEqual(slides[0].lines, ("Nao devemos parar nao devemos", "temer porque o noivo vai chegar"))
 
     def test_invalid_natural_split_falls_back_to_readable_two_line_break(self) -> None:
         config = LayoutConfig()

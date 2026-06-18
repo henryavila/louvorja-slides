@@ -13,6 +13,7 @@ class LayoutConfig:
     min_transition_gap: float = 3.0
     phrase_pause_seconds: float = 0.60
     auxiliary_max_chars: int = 28
+    auxiliary_max_words: int = 3
     allow_auxiliary: bool = True
     weak_break_words: frozenset[str] = field(
         default_factory=lambda: frozenset(
@@ -165,18 +166,74 @@ def _longest_layout(
     start: int,
     cfg: LayoutConfig,
 ) -> tuple[int, _LayoutCandidate]:
-    best: tuple[int, _LayoutCandidate] | None = None
+    viable: list[tuple[int, _LayoutCandidate]] = []
     for end in range(start, len(words)):
         candidate = _layout_segment(words[start : end + 1], cfg)
         if candidate is not None:
-            if best is None or end > best[0] or candidate.score < best[1].score:
-                best = (end, candidate)
+            viable.append((end, candidate))
 
-    if best is not None:
-        return best
+    if viable:
+        duration_ok = [
+            item
+            for item in viable
+            if _duration_ok(words, start, item[0], cfg)
+        ]
+        candidates = duration_ok or viable
+        best_bucket = min(
+            _candidate_bucket(words, start, end, candidate, cfg)
+            for end, candidate in candidates
+        )
+        bucketed = [
+            (end, candidate)
+            for end, candidate in candidates
+            if _candidate_bucket(words, start, end, candidate, cfg) == best_bucket
+        ]
+        return max(bucketed, key=lambda item: (item[0], -item[1].score))
 
     word = words[start]
     return start, _LayoutCandidate(lines=(word.text,), aux_text="", score=0.0)
+
+
+def _candidate_bucket(
+    words: list[LyricWord],
+    start: int,
+    end: int,
+    candidate: _LayoutCandidate,
+    cfg: LayoutConfig,
+) -> int:
+    if candidate.aux_text:
+        line_bucket = 3
+    elif all(len(line) <= cfg.target_max_chars_per_line for line in candidate.lines):
+        line_bucket = 0
+    else:
+        line_bucket = 1
+    boundary_bucket = 0 if _is_natural_segment_end(words, start, end, cfg) else 2
+    return boundary_bucket + line_bucket
+
+
+def _is_natural_segment_end(
+    words: list[LyricWord],
+    start: int,
+    end: int,
+    cfg: LayoutConfig,
+) -> bool:
+    if end == len(words) - 1:
+        return True
+    if _ends_sentence(words[end].text):
+        return True
+    if words[end + 1].start - words[end].end >= cfg.phrase_pause_seconds:
+        return True
+    if _is_weak_break_word(words[end].text, cfg):
+        return False
+    return words[end].end - words[start].start >= cfg.min_slide_duration * 2
+
+
+def _duration_ok(words: list[LyricWord], start: int, end: int, cfg: LayoutConfig) -> bool:
+    if end == len(words) - 1:
+        return True
+    current_duration = words[end].end - words[start].start
+    tail_duration = words[-1].end - words[end + 1].start
+    return current_duration >= cfg.min_slide_duration and tail_duration >= cfg.min_slide_duration
 
 
 def _layout_segment(words: list[LyricWord], cfg: LayoutConfig) -> _LayoutCandidate | None:
@@ -285,6 +342,8 @@ def _auxiliary_layout(
         if len(second_text) > cfg.hard_max_chars_per_line:
             continue
         if len(aux_text) > cfg.auxiliary_max_chars:
+            continue
+        if len(aux) > cfg.auxiliary_max_words:
             continue
         candidates.append(
             _LayoutCandidate(
