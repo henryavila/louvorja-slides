@@ -223,6 +223,6 @@ class LocalWhisperTranscriber:
         except ImportError as exc:
             raise RuntimeError(
                 "pywhispercpp is not installed. Install local transcription "
-                "dependencies or use `--engine titan` on macOS."
+                "dependencies before running audio transcription."
             ) from exc
         return Model(model=model_id)

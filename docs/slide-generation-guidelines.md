@@ -172,10 +172,11 @@ diagnosticos. `--quality-gate off` deve ficar restrito a depuracao.
 
 - A CLI usa um contrato unico de engine para transformar audio em documento de
   letra com timestamps.
-- `--engine auto` seleciona Titan em macOS e a engine local em Linux/WSL.
-- A engine Titan chama `titan_chordpro.orchestrator.transcribe` sem vazar essa
-  dependencia para o exportador LouvorJA.
-- A engine local usa a logica portada do Titan que e relevante para slides:
+- `--engine auto` seleciona a engine local em macOS, Linux e WSL.
+- `titan-chordpro-lib` e apenas referencia de implementacao. Nao importar,
+  instalar, ou chamar essa lib em runtime; quando uma solucao equivalente for
+  util, copiar/adaptar a logica necessaria para este repositorio.
+- A engine local usa a logica portada que e relevante para slides:
   timestamps por palavra, argumentos de qualidade do Whisper, filtro de tokens
   entre colchetes, cache por configuracao e agrupamento adaptativo de frases.
 - Fallbacks que reduzem qualidade, como `--vocal-separation none`, devem ser
