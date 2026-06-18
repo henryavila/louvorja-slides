@@ -91,3 +91,39 @@ The generator plans lyric slides with congregation readability in mind:
 
 Real `.slja` files used for local validation should go in `local_samples/`. That
 directory is ignored by Git so operator examples are not committed accidentally.
+
+## Consensus Phase Gates
+
+Consensus phases must be validated against the complete batch, not only unit
+tests or spot checks. Use the phase gate runner so every phase keeps its own
+history and preserves the old-process artifacts:
+
+```bash
+python scripts/phase_gate_consensus.py \
+  --batch-root /tmp/louvorja-asr-batch-2026-06-18 \
+  --metadata-jsonl /tmp/louvorja-asr-batch-2026-06-18/metadata.jsonl \
+  --phase 1 \
+  --mode execute
+```
+
+The runner writes a new immutable run under
+`<batch-root>/phase-history/phase-<phase>/<run-id>/`. Each run contains:
+
+- `baseline-old-process/`: copied old `.slja` candidates, `best.slja`,
+  old aggregate reports, and input metadata;
+- `phase-output/<video_id>/best-consensus.slja`;
+- `phase-output/<video_id>/consensus-report.md`;
+- `phase-output/<video_id>/comparison.md` and `.json`;
+- `phase-gate-report.md` and `.json`;
+- `phase-effort-report.md` and `.json`, with elapsed time, cache growth, and
+  output size for the phase run.
+
+The default expected batch size is 11. A run with `--limit` is useful for
+debugging, but the phase gate report will not mark it as a full-set pass.
+
+If `quality_references/lyrics/<video_id>.txt` exists, the phase gate also
+checks the generated phase output against that expected lyric text. This gate
+uses normalized word edit distance and fails when the output is below the
+reference similarity threshold or regresses materially against the old-process
+baseline. Use `--reference-lyrics-dir <path>` to point the gate at a different
+reference set.
