@@ -179,6 +179,7 @@ def _longest_layout(
     viable: list[tuple[int, _LayoutCandidate]] = []
     has_source_lines = _has_source_line_hints(words[start:])
     has_musical_boundaries = _has_musical_boundaries(words, start, cfg)
+    max_fittable_chars = _max_fittable_segment_chars(cfg)
     for end in range(start, len(words)):
         segment = words[start : end + 1]
         if has_source_lines:
@@ -195,6 +196,12 @@ def _longest_layout(
         candidate = _layout_segment(segment, cfg)
         if candidate is not None:
             viable.append((end, candidate))
+        if (
+            not has_source_lines
+            and not has_musical_boundaries
+            and len(_join(segment)) > max_fittable_chars
+        ):
+            break
 
     if viable:
         non_overlong = [item for item in viable if not item[1].overlong]

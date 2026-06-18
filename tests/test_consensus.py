@@ -39,6 +39,18 @@ def _candidate(
     )
 
 
+def _timed_words(
+    text: str,
+    *,
+    start: float = 1.0,
+    step: float = 0.35,
+) -> list[tuple[str, float, float]]:
+    return [
+        (token, start + index * step, start + index * step + step * 0.7)
+        for index, token in enumerate(text.split())
+    ]
+
+
 class ConsensusTest(unittest.TestCase):
     def test_normalize_text_removes_accents_case_and_punctuation(self) -> None:
         self.assertEqual(
@@ -118,6 +130,53 @@ class ConsensusTest(unittest.TestCase):
             "alfa beta gama delta",
         )
 
+    def test_falls_back_to_best_whole_candidate_when_phrase_stitching_is_risky(self) -> None:
+        result = build_consensus_from_candidates(
+            [
+                _candidate(
+                    "turbo-vocals",
+                    _timed_words("vocal limpo canta frase certa agora"),
+                ),
+                _candidate(
+                    "medium-original",
+                    _timed_words("ruido confuso inventa outra letra agora"),
+                ),
+                _candidate(
+                    "medium-denoise",
+                    _timed_words("texto distante mistura palavras sem apoio"),
+                ),
+            ],
+            title="Teste",
+        )
+
+        self.assertEqual(result.selection_mode, "whole-candidate")
+        self.assertEqual(result.fallback_source, "turbo-vocals")
+        self.assertIn("low-confidence", result.fallback_reason)
+        self.assertEqual(
+            normalize_text(" ".join(word.text for word in result.transcript.words)),
+            "vocal limpo canta frase certa agora",
+        )
+
+    def test_whole_candidate_fallback_rejects_too_short_vocal_candidate(self) -> None:
+        result = build_consensus_from_candidates(
+            [
+                _candidate("turbo-vocals", [("curto", 1.0, 1.2)]),
+                _candidate(
+                    "medium-original",
+                    _timed_words("frase principal com texto suficiente para escolher"),
+                ),
+                _candidate(
+                    "medium-denoise",
+                    _timed_words("ruido ruido ruido ruido ruido ruido"),
+                ),
+            ],
+            title="Teste",
+        )
+
+        self.assertEqual(result.selection_mode, "whole-candidate")
+        self.assertEqual(result.fallback_source, "medium-original")
+        self.assertGreater(len(result.transcript.words), 1)
+
     def test_report_truncates_phrase_snippets(self) -> None:
         result = build_consensus_from_candidates(
             [
@@ -141,6 +200,31 @@ class ConsensusTest(unittest.TestCase):
         report = format_consensus_report(result)
 
         self.assertIn("um dois tres quatro cinco seis ...", report)
+
+    def test_report_explains_whole_candidate_fallback(self) -> None:
+        result = build_consensus_from_candidates(
+            [
+                _candidate(
+                    "turbo-vocals",
+                    _timed_words("vocal limpo canta frase certa agora"),
+                ),
+                _candidate(
+                    "medium-original",
+                    _timed_words("ruido confuso inventa outra letra agora"),
+                ),
+                _candidate(
+                    "medium-denoise",
+                    _timed_words("texto distante mistura palavras sem apoio"),
+                ),
+            ],
+            title="Teste",
+        )
+
+        report = format_consensus_report(result)
+
+        self.assertIn("## Selection", report)
+        self.assertIn("Mode: whole-candidate", report)
+        self.assertIn("Fallback source: `turbo-vocals`", report)
 
     def test_report_includes_transcription_and_slide_mapping_for_validation(self) -> None:
         result = build_consensus_from_candidates(
@@ -263,6 +347,13 @@ class ConsensusTest(unittest.TestCase):
             )
 
         self.assertIn(("phase1-denoise.wav", "medium", "none"), calls)
+        self.assertEqual(
+            calls[:2],
+            [
+                ("song.mp3", "large-v3-turbo", "htdemucs_ft"),
+                ("song.mp3", "medium", "htdemucs_ft"),
+            ],
+        )
         self.assertIn("youtube-caption", {candidate.name for candidate in result.candidates})
         self.assertIn("turbo-vocals", {source.name for source in result.unavailable_sources})
 
@@ -287,7 +378,7 @@ class ConsensusTest(unittest.TestCase):
             audio_path = tmp_path / "song.mp3"
             audio_path.write_bytes(b"audio")
 
-            with self.assertRaisesRegex(ValueError, "medium-original: whisper missing"):
+            with self.assertRaisesRegex(ValueError, "turbo-vocals: whisper missing"):
                 build_phase1_consensus(
                     audio_path=audio_path,
                     engine=FailingEngine(),

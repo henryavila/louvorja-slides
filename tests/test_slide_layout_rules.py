@@ -92,6 +92,14 @@ class SlideLayoutRulesTest(unittest.TestCase):
 
         self.assertEqual(slides[0].lines, ("E ao olhar pra cruz", "eu entendo amor"))
 
+    def test_long_timestamp_run_without_pauses_uses_bounded_layout_search(self) -> None:
+        words = words_from_text(" ".join(f"palavra{i}" for i in range(120)), step=0.2)
+
+        slides = plan_lyric_slides(words)
+
+        self.assertGreater(len(slides), 1)
+        self.assertTrue(all(slide.lines for slide in slides))
+
     def test_line_break_does_not_end_on_weak_word(self) -> None:
         words = words_from_text("Toma Teu lugar de honra Queremos Tua Presenca aqui")
 

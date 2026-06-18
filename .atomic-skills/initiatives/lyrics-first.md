@@ -3,10 +3,10 @@ slug: lyrics-first
 title: Lyrics-first SLJA generation
 status: active
 started: 2026-06-18
-last_updated: 2026-06-18T19:17:12Z
+last_updated: 2026-06-18T20:35:00Z
 branch: feat/slja-quality-local-only
 plan_link: docs/plans/2026-06-17-lyrics-first-handoff.md
-next_action: Promote vocal separation to first evidence stage with fallback/eligibility gates
+next_action: Compact whole-candidate vocal outputs so phase 1 passes robust slide/line gates
 stack:
   - id: 1
     title: Implement lyrics-first generation path
@@ -86,6 +86,15 @@ tasks:
     status: done
     last_updated: 2026-06-18T19:17:12Z
     closed_at: 2026-06-18T19:17:12Z
+  T-015:
+    title: Promote vocal separation to first evidence stage with whole-candidate fallback
+    status: done
+    last_updated: 2026-06-18T20:35:00Z
+    closed_at: 2026-06-18T20:35:00Z
+  T-016:
+    title: Reduce slide and line expansion from selected vocal whole-candidate outputs
+    status: todo
+    last_updated: 2026-06-18T20:35:00Z
 parked: []
 emerged: []
 ---
@@ -195,3 +204,13 @@ files. Result: `turbo-vocals` dramatically improved `Deus é Refúgio` against
 the evaluation-only reference (0.8760 similarity), but vocal-only is not safe as
 a universal final output because `medium-vocals` failed on 2 songs and
 `turbo-vocals` produced very short/repetitive content in some cases.
+
+2026-06-18: Implemented vocal-first phase 1 ordering and a whole-candidate
+fallback selector. Current full gate:
+`/tmp/louvorja-asr-batch-2026-06-18/phase-history/phase-1/phase1-vocal-first-fallback3-20260618T2010Z/`.
+It completes all 11 videos and fixes the `Deus é Refúgio` reference gate
+(baseline 0.6202 -> phase 0.8760) while preserving 0 hard-limit lines, but the
+robust phase gate still fails on slide/line expansion and auxiliary words:
+slides 130 -> 173, lines 237 -> 332, aux words 18 -> 41. A prior interrupted
+run exposed an unbounded layout search when scoring whole candidates; that is
+fixed by bounded layout scanning and phrase-level fallback scoring.

@@ -20,11 +20,11 @@ from louvorja_slides.slja import Slide
 from louvorja_slides.transcription import Transcript, TranscribedWord
 
 CONSENSUS_PHASE1_SOURCES: tuple[str, ...] = (
+    "turbo-vocals",
+    "medium-vocals",
     "medium-original",
     "medium-denoise",
-    "medium-vocals",
     "turbo-original",
-    "turbo-vocals",
 )
 
 _PHRASE_PAUSE_SECONDS = 0.60
@@ -102,6 +102,31 @@ class ConsensusResult:
     candidates: tuple[ConsensusCandidate, ...]
     decisions: tuple[ConsensusDecision, ...]
     unavailable_sources: tuple[UnavailableConsensusSource, ...] = ()
+    selection_mode: str = "phrase-consensus"
+    fallback_source: str = ""
+    fallback_reason: str = ""
+
+
+@dataclass(frozen=True)
+class _WholeCandidateChoice:
+    candidate: ConsensusCandidate
+    score: float
+    reason: str
+
+
+@dataclass(frozen=True)
+class _WholeCandidateScore:
+    candidate: ConsensusCandidate
+    score: float
+    word_count: int
+    word_ratio: float
+    repetition_penalty: float
+    slide_report: SlideQualityReport
+    reject_reason: str = ""
+
+    @property
+    def eligible(self) -> bool:
+        return not self.reject_reason
 
 
 @dataclass(frozen=True)
@@ -113,12 +138,21 @@ class _CandidateSpec:
 
 
 _PHASE1_SPECS: tuple[_CandidateSpec, ...] = (
+    _CandidateSpec("turbo-vocals", "large-v3-turbo", "htdemucs_ft", "original"),
+    _CandidateSpec("medium-vocals", "medium", "htdemucs_ft", "original"),
     _CandidateSpec("medium-original", "medium", "none", "original"),
     _CandidateSpec("medium-denoise", "medium", "none", "denoise"),
-    _CandidateSpec("medium-vocals", "medium", "htdemucs_ft", "original"),
     _CandidateSpec("turbo-original", "large-v3-turbo", "none", "original"),
-    _CandidateSpec("turbo-vocals", "large-v3-turbo", "htdemucs_ft", "original"),
 )
+
+_WHOLE_CANDIDATE_SOURCE_PRIORITY: dict[str, float] = {
+    "turbo-vocals": 42.0,
+    "medium-vocals": 38.0,
+    "medium-denoise": 10.0,
+    "medium-original": 9.0,
+    "turbo-original": 7.0,
+    "youtube-caption": 5.0,
+}
 
 
 def build_phase1_consensus(
@@ -224,15 +258,38 @@ def build_consensus_from_candidates(
         raise ValueError("consensus produced no lyric words")
 
     duration = max(candidate.transcript.duration_seconds for candidate in candidate_list)
-    transcript = Transcript(
+    consensus_transcript = Transcript(
         words=words,
         detected_language=language,
         duration_seconds=max(duration, words[-1].end, 1.0),
     )
+    consensus_document = transcript_to_document(consensus_transcript, title=title)
+    fallback = _choose_whole_candidate_fallback(
+        candidates=candidate_list,
+        decisions=decisions,
+        title=title,
+    )
+    if fallback is not None:
+        transcript = _candidate_transcript(
+            fallback.candidate,
+            fallback.candidate.transcript.detected_language or language,
+        )
+        return ConsensusResult(
+            phase=phase,
+            transcript=transcript,
+            document=transcript_to_document(transcript, title=title),
+            candidates=tuple(candidate_list),
+            decisions=decisions,
+            unavailable_sources=tuple(unavailable_sources),
+            selection_mode="whole-candidate",
+            fallback_source=fallback.candidate.name,
+            fallback_reason=fallback.reason,
+        )
+
     return ConsensusResult(
         phase=phase,
-        transcript=transcript,
-        document=transcript_to_document(transcript, title=title),
+        transcript=consensus_transcript,
+        document=consensus_document,
         candidates=tuple(candidate_list),
         decisions=decisions,
         unavailable_sources=tuple(unavailable_sources),
@@ -312,6 +369,271 @@ def choose_phrase(
         low_confidence_reason=low_confidence_reason,
         alternatives=scores,
     )
+
+
+def _choose_whole_candidate_fallback(
+    *,
+    candidates: list[ConsensusCandidate],
+    decisions: tuple[ConsensusDecision, ...],
+    title: str | None,
+) -> _WholeCandidateChoice | None:
+    risk_reasons = _phrase_consensus_risk_reasons(
+        candidates=candidates,
+        decisions=decisions,
+    )
+    if not risk_reasons:
+        return None
+
+    scores = tuple(
+        _score_whole_candidate(candidate, candidates, title)
+        for candidate in candidates
+        if _candidate_lyric_words(candidate)
+    )
+    eligible = [score for score in scores if score.eligible]
+    if not eligible:
+        return None
+
+    best = max(
+        eligible,
+        key=lambda item: (
+            item.score,
+            _WHOLE_CANDIDATE_SOURCE_PRIORITY.get(item.candidate.name, 0.0),
+            item.word_count,
+            item.candidate.name,
+        ),
+    )
+    reason = (
+        "; ".join(risk_reasons)
+        + f"; selected `{best.candidate.name}` whole transcript "
+        + f"(score {best.score:.1f}, {best.word_count} words)"
+    )
+    return _WholeCandidateChoice(candidate=best.candidate, score=best.score, reason=reason)
+
+
+def _phrase_consensus_risk_reasons(
+    *,
+    candidates: list[ConsensusCandidate],
+    decisions: tuple[ConsensusDecision, ...],
+) -> list[str]:
+    if len(candidates) < 2 or not decisions:
+        return []
+
+    decision_count = len(decisions)
+    low_confidence_count = sum(1 for decision in decisions if decision.low_confidence)
+    low_confidence_ratio = low_confidence_count / decision_count
+    single_source_count = sum(1 for decision in decisions if decision.support_sources <= 1)
+    single_source_ratio = single_source_count / decision_count
+    overlap_count = _decision_overlap_count(decisions)
+    overlap_ratio = overlap_count / max(decision_count - 1, 1)
+    candidate_phrase_counts: list[int] = []
+    for candidate in candidates:
+        phrase_count = len(segment_candidate_phrases(candidate))
+        if phrase_count:
+            candidate_phrase_counts.append(phrase_count)
+    median_candidate_phrases = (
+        median(candidate_phrase_counts) if candidate_phrase_counts else decision_count
+    )
+
+    reasons: list[str] = []
+    if low_confidence_ratio >= 0.25:
+        reasons.append(
+            "low-confidence phrases "
+            f"{low_confidence_count}/{decision_count} ({low_confidence_ratio:.1%})"
+        )
+    if len(candidates) >= 3 and single_source_ratio >= 0.45:
+        reasons.append(
+            "single-source phrase winners "
+            f"{single_source_count}/{decision_count} ({single_source_ratio:.1%})"
+        )
+    if overlap_count > 0 and (overlap_count >= 2 or overlap_ratio >= 0.10):
+        reasons.append(
+            "overlapping phrase windows "
+            f"{overlap_count}/{max(decision_count - 1, 1)} ({overlap_ratio:.1%})"
+        )
+    if decision_count > median_candidate_phrases * 1.5 + 4:
+        reasons.append(
+            "phrase fragmentation "
+            f"{decision_count} decisions vs median candidate {median_candidate_phrases:.1f}"
+        )
+    return reasons
+
+
+def _decision_overlap_count(decisions: tuple[ConsensusDecision, ...]) -> int:
+    ordered = sorted(decisions, key=lambda decision: (decision.start, decision.end))
+    return sum(
+        1
+        for previous, current in zip(ordered, ordered[1:])
+        if current.start < previous.end - 0.05
+    )
+
+
+def _score_whole_candidate(
+    candidate: ConsensusCandidate,
+    candidates: list[ConsensusCandidate],
+    title: str | None,
+) -> _WholeCandidateScore:
+    del title
+    transcript = _candidate_transcript(
+        candidate,
+        candidate.transcript.detected_language,
+    )
+    words = transcript.words
+    word_count = len(words)
+    candidate_word_counts = [
+        len(_candidate_lyric_words(item))
+        for item in candidates
+        if _candidate_lyric_words(item)
+    ]
+    median_words = max(float(median(candidate_word_counts)), 1.0)
+    word_ratio = word_count / median_words
+
+    slide_report = _estimate_whole_candidate_slide_report(candidate)
+    tokens = tuple(normalize_text(" ".join(word.text for word in words)).split())
+    repetition_penalty = _whole_repetition_penalty(tokens)
+    min_words = _minimum_whole_candidate_words(median_words)
+    reject_reason = ""
+    if word_count < min_words:
+        reject_reason = f"too short ({word_count} words; minimum {min_words})"
+    elif word_ratio < 0.45:
+        reject_reason = f"too little coverage ({word_ratio:.2f}x median words)"
+    elif word_ratio > 2.25:
+        reject_reason = f"too much coverage ({word_ratio:.2f}x median words)"
+
+    score = 100.0 + _WHOLE_CANDIDATE_SOURCE_PRIORITY.get(candidate.name, 0.0)
+    score -= slide_report.over_hard_line_count * 100.0
+    score -= slide_report.fast_transition_count * 3.0
+    score -= slide_report.auxiliary_word_count * 3.0
+    score -= slide_report.over_target_line_count
+    score -= abs(math.log(max(word_ratio, 0.01))) * 12.0
+    score -= repetition_penalty * 0.8
+    score -= slide_report.slide_count * 0.3
+    return _WholeCandidateScore(
+        candidate=candidate,
+        score=score,
+        word_count=word_count,
+        word_ratio=word_ratio,
+        repetition_penalty=repetition_penalty,
+        slide_report=slide_report,
+        reject_reason=reject_reason,
+    )
+
+
+def _estimate_whole_candidate_slide_report(
+    candidate: ConsensusCandidate,
+    cfg: LayoutConfig | None = None,
+) -> SlideQualityReport:
+    layout_config = cfg or LayoutConfig()
+    phrases = segment_candidate_phrases(candidate)
+    if not phrases:
+        return SlideQualityReport(
+            slide_count=0,
+            empty_slide_count=0,
+            main_word_count=0,
+            auxiliary_word_count=0,
+            auxiliary_slide_count=0,
+            line_count=0,
+            over_target_line_count=0,
+            over_hard_line_count=0,
+            transition_count=0,
+            fast_transition_count=0,
+            median_line_chars=0.0,
+        )
+
+    lines: list[str] = []
+    aux_texts: list[str] = []
+    slide_starts: list[float] = []
+    for phrase in phrases:
+        lyric_words = [
+            LyricWord(text=word.text, start=word.start, end=word.end)
+            for word in phrase.words
+        ]
+        try:
+            plans = plan_lyric_slides(lyric_words, layout_config)
+        except ValueError:
+            lines.append(phrase.text)
+            slide_starts.append(phrase.start)
+            continue
+        for plan in plans:
+            lines.extend(plan.lines)
+            if plan.aux_text:
+                aux_texts.append(plan.aux_text)
+            slide_starts.append(plan.start_seconds)
+
+    transitions = [
+        current - previous for previous, current in zip(slide_starts, slide_starts[1:])
+    ]
+    line_lengths = sorted(len(line) for line in lines)
+    return SlideQualityReport(
+        slide_count=len(slide_starts),
+        empty_slide_count=0,
+        main_word_count=sum(_rough_word_count(line) for line in lines),
+        auxiliary_word_count=sum(_rough_word_count(text) for text in aux_texts),
+        auxiliary_slide_count=len(aux_texts),
+        line_count=len(lines),
+        over_target_line_count=sum(
+            1 for line in lines if len(line) > layout_config.target_max_chars_per_line
+        ),
+        over_hard_line_count=sum(
+            1 for line in lines if len(line) > layout_config.hard_max_chars_per_line
+        ),
+        transition_count=len(transitions),
+        fast_transition_count=sum(
+            1
+            for transition in transitions
+            if transition < layout_config.min_transition_gap
+        ),
+        median_line_chars=float(median(line_lengths)) if line_lengths else 0.0,
+    )
+
+
+def _rough_word_count(text: str) -> int:
+    return len([token for token in normalize_text(text).split() if token])
+
+
+def _minimum_whole_candidate_words(median_words: float) -> int:
+    if median_words < 8:
+        return max(2, int(math.ceil(median_words * 0.45)))
+    return max(4, min(30, int(median_words * 0.45)))
+
+
+def _whole_repetition_penalty(tokens: tuple[str, ...]) -> float:
+    if len(tokens) <= 2:
+        return 0.0
+    consecutive_repeats = sum(
+        1 for previous, current in zip(tokens, tokens[1:]) if previous == current
+    )
+    max_run = 1
+    current_run = 1
+    for previous, current in zip(tokens, tokens[1:]):
+        if previous == current:
+            current_run += 1
+        else:
+            max_run = max(max_run, current_run)
+            current_run = 1
+    max_run = max(max_run, current_run)
+    return consecutive_repeats * 8.0 + max(0, max_run - 2) * 20.0
+
+
+def _candidate_transcript(
+    candidate: ConsensusCandidate,
+    language: str | None,
+) -> Transcript:
+    words = [
+        _retag_word(word, candidate.name)
+        for word in candidate.transcript.words
+        if _has_lyric_text(word.text)
+    ]
+    if not words:
+        raise ValueError(f"{candidate.name} has no lyric words")
+    return Transcript(
+        words=words,
+        detected_language=language,
+        duration_seconds=max(candidate.transcript.duration_seconds, words[-1].end, 1.0),
+    )
+
+
+def _candidate_lyric_words(candidate: ConsensusCandidate) -> list[TranscribedWord]:
+    return [word for word in candidate.transcript.words if _has_lyric_text(word.text)]
 
 
 def normalize_text(text: str | None) -> str:
@@ -432,6 +754,19 @@ def format_consensus_report(
                 f"- Auxiliary words: {report.auxiliary_word_count}",
             ]
         )
+
+    lines.extend(
+        [
+            "",
+            "## Selection",
+            "",
+            f"- Mode: {result.selection_mode}",
+        ]
+    )
+    if result.fallback_source:
+        lines.append(f"- Fallback source: `{result.fallback_source}`")
+    if result.fallback_reason:
+        lines.append(f"- Fallback reason: {_one_line(result.fallback_reason)}")
 
     lines.extend(
         [

@@ -377,3 +377,28 @@
   visible repetition/hallucination tails in some songs. Use separation as the
   first evidence-generation stage, but keep automatic fallback/eligibility
   checks before making vocal output final.
+- Phase 1 now runs vocal-first candidate generation (`turbo-vocals`,
+  `medium-vocals`, then original/denoise/original-turbo) and uses a
+  whole-candidate fallback when phrase stitching is risky. The selector does
+  not use reference lyrics; it scores source priority, coverage, repetition,
+  and estimated layout risk, and rejects very short/long candidates. Reports
+  include `Selection` with mode/source/reason.
+- A failed attempt,
+  `phase1-vocal-first-fallback-20260618T1930Z`, exposed a root-cause
+  performance bug: scoring whole candidates with full layout extraction can
+  drive `plan_lyric_slides` into an unbounded search on long timestamp runs
+  with no musical pauses. `layout._longest_layout` now stops scanning once an
+  unconstrained segment exceeds the maximum fittable text, and fallback scoring
+  uses cheap phrase-level layout estimates for all candidates. Regression test:
+  `test_long_timestamp_run_without_pauses_uses_bounded_layout_search`.
+- Current vocal-first fallback gate:
+  `/tmp/louvorja-asr-batch-2026-06-18/phase-history/phase-1/phase1-vocal-first-fallback3-20260618T2010Z/`.
+  It processed all 11 videos in 33s cached time with 0 B cache growth and fixed
+  the `Deus é Refúgio` reference gate: baseline similarity 0.6202 -> phase
+  0.8760, selecting `turbo-vocals` without using the reference in generation.
+  Robust phase gate still fails: slides 130 -> 173, lines 237 -> 332,
+  fast transitions 0 -> 1, aux words 18 -> 41, over-target lines 45 -> 61.
+  Remaining blockers are slide/line expansion on `SpWZF8jdfCA`,
+  `iB29MsdK6dE`, and `mWw_x_B19oo`, plus one fast transition in
+  `J-LrXdce3BQ`. Next work should compact/layout whole-candidate vocal output
+  without losing the content gains.
