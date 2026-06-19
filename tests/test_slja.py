@@ -31,6 +31,14 @@ def _line(text: str, start: float) -> SimpleNamespace:
     )
 
 
+def _aligned_line(text: str, start: float = 0.0) -> SimpleNamespace:
+    words = [
+        _word(token, start + index * 0.5, start + index * 0.5 + 0.4)
+        for index, token in enumerate(text.split())
+    ]
+    return SimpleNamespace(line_type="lyric", text=text, word_alignments=words)
+
+
 def _explicit_line(text: str, start: float, line_index: int) -> SimpleNamespace:
     line = _line(text, start)
     line.source_line_index = line_index
@@ -133,6 +141,32 @@ class SljaExporterTest(unittest.TestCase):
                     aux_text="(3x)",
                 ),
             ],
+        )
+
+    def test_extract_lyric_slides_can_disable_auxiliary_text(self) -> None:
+        doc = SimpleNamespace(
+            sections=[
+                SimpleNamespace(
+                    lines=[
+                        _aligned_line(
+                            "Nao devemos parar nao devemos temer pela tua misericordia"
+                        ),
+                    ]
+                )
+            ]
+        )
+
+        slides = extract_lyric_slides(
+            doc,
+            allow_auxiliary=False,
+            hard_max_chars_per_line=28,
+        )
+
+        self.assertTrue(slides)
+        self.assertTrue(all(not slide.aux_text for slide in slides))
+        self.assertIn(
+            "pela tua misericordia",
+            " ".join(line for slide in slides for line in slide.lines),
         )
 
     def test_render_lja_uses_louvorja_fields_cp1252_and_crlf(self) -> None:

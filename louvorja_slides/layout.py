@@ -117,9 +117,10 @@ def collapse_repeated_slides(slides: Iterable[SlidePlan]) -> list[SlidePlan]:
         repeat_count = 1
         repeat_end_seconds = current.end_seconds
         next_index = index + 1
+        current_key = _slide_repeat_key(current)
         while next_index < len(slide_list):
             next_slide = slide_list[next_index]
-            if next_slide.aux_text or next_slide.lines != current.lines:
+            if next_slide.aux_text or _slide_repeat_key(next_slide) != current_key:
                 break
             repeat_count += 1
             repeat_end_seconds = next_slide.end_seconds
@@ -139,6 +140,14 @@ def collapse_repeated_slides(slides: Iterable[SlidePlan]) -> list[SlidePlan]:
         index = next_index
 
     return collapsed
+
+
+def _slide_repeat_key(slide: SlidePlan) -> tuple[str, ...]:
+    return tuple(_normalize_repeat_line(line) for line in slide.lines)
+
+
+def _normalize_repeat_line(text: str) -> str:
+    return " ".join(_normalize_word(part) for part in text.split())
 
 
 def _coerce_word(word: Any) -> LyricWord:

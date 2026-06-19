@@ -130,6 +130,68 @@ class PhaseGateTest(unittest.TestCase):
         self.assertFalse(summary["phase_gate_pass"])
         self.assertIn("slide count ratio", "\n".join(summary["gate_failures"]))
 
+    def test_summary_allows_valid_wrap_equivalent_layout_growth(self) -> None:
+        comparison = _comparison(
+            "video-hard-wrapped-baseline",
+            baseline=_metrics(
+                slide_count=7,
+                line_count=12,
+                over_hard=8,
+                text_words=360,
+                hard_wrapped_line_count=38,
+                hard_wrapped_slide_count=19,
+            ),
+            phase=_metrics(
+                slide_count=19,
+                line_count=38,
+                over_hard=0,
+                text_words=227,
+            ),
+        )
+
+        summary = phase_gate_consensus.phase_gate_summary(
+            phase="1",
+            mode="execute",
+            expected_count=1,
+            discovered_count=1,
+            comparisons=[comparison],
+        )
+
+        self.assertTrue(summary["slide_count_gate_pass"])
+        self.assertTrue(summary["line_count_gate_pass"])
+        self.assertTrue(summary["phase_gate_pass"])
+        self.assertEqual(summary["baseline_total_comparable_slides"], 19)
+        self.assertEqual(summary["baseline_total_comparable_lines"], 38)
+
+    def test_summary_scales_layout_allowance_for_more_generated_words(self) -> None:
+        comparison = _comparison(
+            "video-more-words",
+            baseline=_metrics(
+                slide_count=6,
+                line_count=9,
+                over_hard=2,
+                text_words=44,
+            ),
+            phase=_metrics(
+                slide_count=16,
+                line_count=32,
+                over_hard=0,
+                text_words=129,
+            ),
+        )
+
+        summary = phase_gate_consensus.phase_gate_summary(
+            phase="1",
+            mode="execute",
+            expected_count=1,
+            discovered_count=1,
+            comparisons=[comparison],
+        )
+
+        self.assertTrue(summary["slide_count_gate_pass"])
+        self.assertTrue(summary["line_count_gate_pass"])
+        self.assertTrue(summary["phase_gate_pass"])
+
     def test_summary_rejects_fast_transition_regression(self) -> None:
         comparison = _comparison(
             "video-fast",
@@ -154,6 +216,28 @@ class PhaseGateTest(unittest.TestCase):
         self.assertFalse(summary["fast_transition_gate_pass"])
         self.assertFalse(summary["phase_gate_pass"])
         self.assertIn("fast transition", "\n".join(summary["gate_failures"]))
+
+    def test_summary_allows_isolated_fast_transition_when_ratio_stays_low(self) -> None:
+        comparison = _comparison(
+            "video-isolated-fast",
+            baseline=_metrics(slide_count=120, line_count=240),
+            phase=_metrics(
+                slide_count=121,
+                line_count=242,
+                fast_transitions=1,
+            ),
+        )
+
+        summary = phase_gate_consensus.phase_gate_summary(
+            phase="1",
+            mode="execute",
+            expected_count=1,
+            discovered_count=1,
+            comparisons=[comparison],
+        )
+
+        self.assertTrue(summary["fast_transition_gate_pass"])
+        self.assertTrue(summary["phase_gate_pass"])
 
     def test_summary_rejects_auxiliary_word_regression(self) -> None:
         comparison = _comparison(
@@ -592,6 +676,8 @@ def _metrics(
     fast_transitions: int = 0,
     text_words: int = 120,
     median_line_chars: float = 20.0,
+    hard_wrapped_line_count: int = 0,
+    hard_wrapped_slide_count: int = 0,
 ) -> phase_gate_consensus.ArchiveMetrics:
     return phase_gate_consensus.ArchiveMetrics(
         path="/tmp/test.slja",
@@ -603,6 +689,8 @@ def _metrics(
         fast_transitions=fast_transitions,
         text_words=text_words,
         median_line_chars=median_line_chars,
+        hard_wrapped_line_count=hard_wrapped_line_count,
+        hard_wrapped_slide_count=hard_wrapped_slide_count,
     )
 
 

@@ -325,6 +325,34 @@ class SlideLayoutRulesTest(unittest.TestCase):
             ],
         )
 
+    def test_repeated_slides_collapse_with_case_difference(self) -> None:
+        slides = collapse_repeated_slides(
+            [
+                SlidePlan(
+                    lines=("voce vai se", "sentir feliz."),
+                    start_seconds=1.0,
+                    end_seconds=4.0,
+                ),
+                SlidePlan(
+                    lines=("Voce vai se", "sentir feliz."),
+                    start_seconds=4.0,
+                    end_seconds=7.0,
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            slides,
+            [
+                SlidePlan(
+                    lines=("voce vai se", "sentir feliz."),
+                    start_seconds=1.0,
+                    end_seconds=7.0,
+                    aux_text="(2x)",
+                )
+            ],
+        )
+
     def test_consecutive_repeated_slides_are_collapsed_with_three_times_marker(self) -> None:
         slides = collapse_repeated_slides(
             [

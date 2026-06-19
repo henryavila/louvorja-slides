@@ -76,11 +76,19 @@ def read_slja(path: Path, *, tick_rate: float = 192000.0) -> SljaArchive:
     return SljaArchive(title=title, audio_member=audio_member, slides=tuple(slides))
 
 
-def extract_lyric_slides(doc: Any, lines_per_slide: int = 2) -> list[Slide]:
+def extract_lyric_slides(
+    doc: Any,
+    lines_per_slide: int = 2,
+    *,
+    allow_auxiliary: bool = True,
+    hard_max_chars_per_line: int = LayoutConfig().hard_max_chars_per_line,
+) -> list[Slide]:
     if lines_per_slide < 1:
         raise ValueError("lines_per_slide must be >= 1")
     if lines_per_slide > 2:
         raise ValueError("lines_per_slide must be <= 2")
+    if hard_max_chars_per_line < 1:
+        raise ValueError("hard_max_chars_per_line must be >= 1")
 
     lyric_words: list[LyricWord] = []
     for section_index, section in enumerate(getattr(doc, "sections", [])):
@@ -111,7 +119,11 @@ def extract_lyric_slides(doc: Any, lines_per_slide: int = 2) -> list[Slide]:
 
     plans = plan_lyric_slides(
         lyric_words,
-        config=LayoutConfig(max_lines_per_slide=lines_per_slide),
+        config=LayoutConfig(
+            max_lines_per_slide=lines_per_slide,
+            allow_auxiliary=allow_auxiliary,
+            hard_max_chars_per_line=hard_max_chars_per_line,
+        ),
     )
     return [
         Slide(lines=plan.lines, start_seconds=plan.start_seconds, aux_text=plan.aux_text)

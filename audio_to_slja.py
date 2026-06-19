@@ -216,7 +216,14 @@ def run(args: argparse.Namespace) -> int:
             title=title,
         )
 
-    slides = extract_lyric_slides(doc, lines_per_slide=args.lines_per_slide)
+    slides = extract_lyric_slides(
+        doc,
+        lines_per_slide=args.lines_per_slide,
+        allow_auxiliary=args.transcription_strategy != "consensus",
+        hard_max_chars_per_line=28
+        if args.transcription_strategy == "consensus"
+        else 34,
+    )
     slide_report, _transcript_report = enforce_quality(
         slides=slides,
         transcript=getattr(doc, "transcript", None),

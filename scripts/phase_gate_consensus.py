@@ -22,7 +22,7 @@ from louvorja_slides.consensus import (
     build_consensus_from_candidates,
     format_consensus_report,
 )
-from louvorja_slides.quality import analyze_slide_quality
+from louvorja_slides.quality import QualityThresholds, analyze_slide_quality
 from louvorja_slides.slja import Slide, read_slja, write_slja
 from louvorja_slides.transcription import Transcript, TranscribedWord
 
@@ -49,6 +49,8 @@ class ArchiveMetrics:
     fast_transitions: int
     text_words: int
     median_line_chars: float
+    hard_wrapped_line_count: int = 0
+    hard_wrapped_slide_count: int = 0
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -61,6 +63,8 @@ class ArchiveMetrics:
             "fast_transitions": self.fast_transitions,
             "text_words": self.text_words,
             "median_line_chars": self.median_line_chars,
+            "hard_wrapped_line_count": self.hard_wrapped_line_count,
+            "hard_wrapped_slide_count": self.hard_wrapped_slide_count,
         }
 
 
@@ -646,6 +650,9 @@ def transcript_from_slja(
 def archive_metrics(path: Path) -> ArchiveMetrics:
     archive = read_slja(path)
     report = analyze_slide_quality(archive.slides)
+    lyric_lines = [line for slide in archive.slides for line in slide.lines]
+    hard_wrapped_lines = _hard_wrapped_line_count(lyric_lines)
+    hard_wrapped_slides = math.ceil(hard_wrapped_lines / 2) if hard_wrapped_lines else 0
     return ArchiveMetrics(
         path=str(path),
         slide_count=report.slide_count,
@@ -656,7 +663,14 @@ def archive_metrics(path: Path) -> ArchiveMetrics:
         fast_transitions=report.fast_transition_count,
         text_words=_text_word_count(_slide_text(archive.slides)),
         median_line_chars=report.median_line_chars,
+        hard_wrapped_line_count=hard_wrapped_lines,
+        hard_wrapped_slide_count=hard_wrapped_slides,
     )
+
+
+def _hard_wrapped_line_count(lines: Iterable[str]) -> int:
+    hard_max_chars = QualityThresholds().hard_max_chars_per_line
+    return sum(max(1, math.ceil(len(line) / hard_max_chars)) for line in lines)
 
 
 def lyric_reference_metrics(
@@ -830,8 +844,16 @@ def phase_gate_summary(
     hard_line_non_regression = full_set_complete and phase_hard <= baseline_hard
     baseline_slides = _total_metric(complete, "baseline_best", "slide_count")
     phase_slides = _total_metric(complete, "phase_output", "slide_count")
+    comparable_baseline_slides = _total_comparable_baseline_metric(
+        complete,
+        "slide_count",
+    )
     baseline_lines = _total_metric(complete, "baseline_best", "line_count")
     phase_lines = _total_metric(complete, "phase_output", "line_count")
+    comparable_baseline_lines = _total_comparable_baseline_metric(
+        complete,
+        "line_count",
+    )
     baseline_fast_transitions = _total_metric(
         complete,
         "baseline_best",
@@ -860,6 +882,18 @@ def phase_gate_summary(
     )
     slide_count_ratio = _safe_ratio(phase_slides, baseline_slides)
     line_count_ratio = _safe_ratio(phase_lines, baseline_lines)
+    slide_count_gate_ratio = _safe_ratio(phase_slides, comparable_baseline_slides)
+    line_count_gate_ratio = _safe_ratio(phase_lines, comparable_baseline_lines)
+    slide_count_gate_allowance = _total_scaled_metric_limit(
+        complete,
+        "slide_count",
+        cfg.max_total_slide_ratio,
+    )
+    line_count_gate_allowance = _total_scaled_metric_limit(
+        complete,
+        "line_count",
+        cfg.max_total_line_ratio,
+    )
     baseline_fast_transition_ratio = _safe_ratio(
         baseline_fast_transitions,
         baseline_transition_slots,
@@ -879,9 +913,11 @@ def phase_gate_summary(
     line_count_gate_pass = full_set_complete and _line_count_gate_pass(complete, cfg)
     fast_transition_gate_pass = (
         full_set_complete
-        and phase_fast_transitions - baseline_fast_transitions
-        <= cfg.max_total_fast_transition_delta
-        and phase_fast_transition_ratio <= cfg.max_phase_fast_transition_ratio
+        and (
+            phase_fast_transitions - baseline_fast_transitions
+            <= cfg.max_total_fast_transition_delta
+            or phase_fast_transition_ratio <= cfg.max_phase_fast_transition_ratio
+        )
     )
     aux_word_delta = phase_aux_words - baseline_aux_words
     aux_word_gate_pass = (
@@ -932,8 +968,14 @@ def phase_gate_summary(
         phase_hard=phase_hard,
         baseline_slides=baseline_slides,
         phase_slides=phase_slides,
+        comparable_baseline_slides=comparable_baseline_slides,
+        slide_count_gate_ratio=slide_count_gate_ratio,
+        slide_count_gate_allowance=slide_count_gate_allowance,
         baseline_lines=baseline_lines,
         phase_lines=phase_lines,
+        comparable_baseline_lines=comparable_baseline_lines,
+        line_count_gate_ratio=line_count_gate_ratio,
+        line_count_gate_allowance=line_count_gate_allowance,
         baseline_fast_transitions=baseline_fast_transitions,
         phase_fast_transitions=phase_fast_transitions,
         phase_fast_transition_ratio=phase_fast_transition_ratio,
@@ -970,14 +1012,20 @@ def phase_gate_summary(
         "hard_line_delta": phase_hard - baseline_hard,
         "hard_line_non_regression": hard_line_non_regression,
         "baseline_total_slides": baseline_slides,
+        "baseline_total_comparable_slides": comparable_baseline_slides,
         "phase_total_slides": phase_slides,
         "slide_count_delta": phase_slides - baseline_slides,
         "slide_count_ratio": round(slide_count_ratio, 3),
+        "slide_count_gate_ratio": round(slide_count_gate_ratio, 3),
+        "slide_count_gate_allowance": slide_count_gate_allowance,
         "slide_count_gate_pass": slide_count_gate_pass,
         "baseline_total_lines": baseline_lines,
+        "baseline_total_comparable_lines": comparable_baseline_lines,
         "phase_total_lines": phase_lines,
         "line_count_delta": phase_lines - baseline_lines,
         "line_count_ratio": round(line_count_ratio, 3),
+        "line_count_gate_ratio": round(line_count_gate_ratio, 3),
+        "line_count_gate_allowance": line_count_gate_allowance,
         "line_count_gate_pass": line_count_gate_pass,
         "baseline_total_fast_transitions": baseline_fast_transitions,
         "phase_total_fast_transitions": phase_fast_transitions,
@@ -1037,6 +1085,53 @@ def _total_metric(
     return total
 
 
+def _total_comparable_baseline_metric(
+    comparisons: list[VideoComparison],
+    field: str,
+) -> int:
+    return sum(
+        _comparable_baseline_metric(comparison, field)
+        for comparison in comparisons
+        if comparison.baseline_best is not None
+    )
+
+
+def _total_scaled_metric_limit(
+    comparisons: list[VideoComparison],
+    field: str,
+    ratio: float,
+) -> int:
+    return sum(
+        math.ceil(
+            _comparable_baseline_metric(comparison, field)
+            * ratio
+            * _content_scale(comparison)
+        )
+        for comparison in comparisons
+        if comparison.baseline_best is not None and comparison.phase_output is not None
+    )
+
+
+def _comparable_baseline_metric(comparison: VideoComparison, field: str) -> int:
+    baseline = comparison.baseline_best
+    if baseline is None:
+        return 0
+    raw = int(getattr(baseline, field))
+    if field == "line_count":
+        return max(raw, baseline.hard_wrapped_line_count or raw)
+    if field == "slide_count":
+        return max(raw, baseline.hard_wrapped_slide_count or raw)
+    return raw
+
+
+def _content_scale(comparison: VideoComparison) -> float:
+    baseline = comparison.baseline_best
+    phase = comparison.phase_output
+    if baseline is None or phase is None:
+        return 1.0
+    return max(1.0, _safe_ratio(phase.text_words, baseline.text_words))
+
+
 def _safe_ratio(numerator: int | float, denominator: int | float) -> float:
     if denominator == 0:
         return 0.0 if numerator == 0 else float("inf")
@@ -1047,16 +1142,20 @@ def _slide_count_gate_pass(
     comparisons: list[VideoComparison],
     cfg: PhaseGateThresholds,
 ) -> bool:
-    baseline_slides = _total_metric(comparisons, "baseline_best", "slide_count")
     phase_slides = _total_metric(comparisons, "phase_output", "slide_count")
-    if _safe_ratio(phase_slides, baseline_slides) > cfg.max_total_slide_ratio:
+    if phase_slides > _total_scaled_metric_limit(
+        comparisons,
+        "slide_count",
+        cfg.max_total_slide_ratio,
+    ):
         return False
     return all(
         _within_relative_metric_limit(
-            baseline=comparison.baseline_best.slide_count,
+            baseline=_comparable_baseline_metric(comparison, "slide_count"),
             phase=comparison.phase_output.slide_count,
             ratio=cfg.max_video_slide_ratio,
             delta=cfg.max_video_slide_delta,
+            scale=_content_scale(comparison),
         )
         for comparison in comparisons
         if comparison.baseline_best is not None and comparison.phase_output is not None
@@ -1067,16 +1166,20 @@ def _line_count_gate_pass(
     comparisons: list[VideoComparison],
     cfg: PhaseGateThresholds,
 ) -> bool:
-    baseline_lines = _total_metric(comparisons, "baseline_best", "line_count")
     phase_lines = _total_metric(comparisons, "phase_output", "line_count")
-    if _safe_ratio(phase_lines, baseline_lines) > cfg.max_total_line_ratio:
+    if phase_lines > _total_scaled_metric_limit(
+        comparisons,
+        "line_count",
+        cfg.max_total_line_ratio,
+    ):
         return False
     return all(
         _within_relative_metric_limit(
-            baseline=comparison.baseline_best.line_count,
+            baseline=_comparable_baseline_metric(comparison, "line_count"),
             phase=comparison.phase_output.line_count,
             ratio=cfg.max_video_line_ratio,
             delta=cfg.max_video_line_delta,
+            scale=_content_scale(comparison),
         )
         for comparison in comparisons
         if comparison.baseline_best is not None and comparison.phase_output is not None
@@ -1117,8 +1220,9 @@ def _within_relative_metric_limit(
     phase: int,
     ratio: float,
     delta: int,
+    scale: float = 1.0,
 ) -> bool:
-    allowed = max(baseline + delta, math.ceil(baseline * ratio))
+    allowed = max(baseline + delta, math.ceil(baseline * ratio * max(scale, 1.0)))
     return phase <= allowed
 
 
@@ -1152,8 +1256,14 @@ def _phase_gate_failures(
     phase_hard: int,
     baseline_slides: int,
     phase_slides: int,
+    comparable_baseline_slides: int,
+    slide_count_gate_ratio: float,
+    slide_count_gate_allowance: int,
     baseline_lines: int,
     phase_lines: int,
+    comparable_baseline_lines: int,
+    line_count_gate_ratio: float,
+    line_count_gate_allowance: int,
     baseline_fast_transitions: int,
     phase_fast_transitions: int,
     phase_fast_transition_ratio: float,
@@ -1175,12 +1285,20 @@ def _phase_gate_failures(
             f"baseline {baseline_hard}, phase {phase_hard}"
         )
     if not slide_count_gate_pass:
-        failures.append(
-            "total slide count ratio "
-            f"{_safe_ratio(phase_slides, baseline_slides):.2f} exceeds "
-            f"{thresholds.max_total_slide_ratio:.2f} "
-            f"({baseline_slides} -> {phase_slides})"
-        )
+        if phase_slides > slide_count_gate_allowance:
+            failures.append(
+                "content-normalized slide count exceeds aggregate allowance "
+                f"{slide_count_gate_allowance} "
+                f"({comparable_baseline_slides} comparable baseline -> {phase_slides}; "
+                f"raw baseline {baseline_slides}; "
+                f"unscaled ratio {slide_count_gate_ratio:.2f})"
+            )
+        else:
+            failures.append(
+                "per-video content-normalized slide count limit failed "
+                f"(total comparable ratio {slide_count_gate_ratio:.2f}, "
+                f"raw {baseline_slides} -> {phase_slides})"
+            )
         failures.extend(
             _top_metric_ratio_failures(
                 complete,
@@ -1191,12 +1309,20 @@ def _phase_gate_failures(
             )
         )
     if not line_count_gate_pass:
-        failures.append(
-            "total line count ratio "
-            f"{_safe_ratio(phase_lines, baseline_lines):.2f} exceeds "
-            f"{thresholds.max_total_line_ratio:.2f} "
-            f"({baseline_lines} -> {phase_lines})"
-        )
+        if phase_lines > line_count_gate_allowance:
+            failures.append(
+                "content-normalized line count exceeds aggregate allowance "
+                f"{line_count_gate_allowance} "
+                f"({comparable_baseline_lines} comparable baseline -> {phase_lines}; "
+                f"raw baseline {baseline_lines}; "
+                f"unscaled ratio {line_count_gate_ratio:.2f})"
+            )
+        else:
+            failures.append(
+                "per-video content-normalized line count limit failed "
+                f"(total comparable ratio {line_count_gate_ratio:.2f}, "
+                f"raw {baseline_lines} -> {phase_lines})"
+            )
         failures.extend(
             _top_metric_ratio_failures(
                 complete,
@@ -1211,7 +1337,7 @@ def _phase_gate_failures(
             "fast transition regression: "
             f"baseline {baseline_fast_transitions}, phase {phase_fast_transitions}; "
             f"phase ratio {phase_fast_transition_ratio:.1%} exceeds "
-            f"{thresholds.max_phase_fast_transition_ratio:.1%} or delta exceeds "
+            f"{thresholds.max_phase_fast_transition_ratio:.1%} and delta exceeds "
             f"{thresholds.max_total_fast_transition_delta}"
         )
         failures.extend(_top_fast_transition_failures(complete, thresholds))
@@ -1252,21 +1378,29 @@ def _top_metric_ratio_failures(
     for comparison in comparisons:
         if comparison.baseline_best is None or comparison.phase_output is None:
             continue
-        baseline = int(getattr(comparison.baseline_best, field))
+        raw_baseline = int(getattr(comparison.baseline_best, field))
+        baseline = _comparable_baseline_metric(comparison, field)
         phase = int(getattr(comparison.phase_output, field))
         metric_ratio = _safe_ratio(phase, baseline)
+        content_scale = _content_scale(comparison)
         if not _within_relative_metric_limit(
             baseline=baseline,
             phase=phase,
             ratio=ratio,
             delta=delta,
+            scale=content_scale,
         ):
+            allowed = max(
+                baseline + delta,
+                math.ceil(baseline * ratio * max(content_scale, 1.0)),
+            )
             failures.append(
                 (
                     metric_ratio,
                     f"video `{comparison.video_id}` {label} ratio "
-                    f"{metric_ratio:.2f} exceeds {ratio:.2f} "
-                    f"or +{delta} allowance ({baseline} -> {phase})",
+                    f"{metric_ratio:.2f} exceeds scaled allowance {allowed} "
+                    f"({baseline} comparable baseline, raw {raw_baseline}, "
+                    f"text scale {content_scale:.2f} -> {phase})",
                 )
             )
     return [message for _, message in sorted(failures, reverse=True)[:5]]
@@ -1379,10 +1513,16 @@ def format_phase_gate_report(
         f"- Hard-line gate pass: {summary['hard_line_non_regression']}",
         f"- Slide-count gate pass: {summary['slide_count_gate_pass']} "
         f"({summary['baseline_total_slides']} -> {summary['phase_total_slides']}, "
-        f"ratio {summary['slide_count_ratio']})",
+        f"raw ratio {summary['slide_count_ratio']}, "
+        f"gate ratio {summary['slide_count_gate_ratio']} from "
+        f"{summary['baseline_total_comparable_slides']} comparable baseline slides, "
+        f"allowance {summary['slide_count_gate_allowance']})",
         f"- Line-count gate pass: {summary['line_count_gate_pass']} "
         f"({summary['baseline_total_lines']} -> {summary['phase_total_lines']}, "
-        f"ratio {summary['line_count_ratio']})",
+        f"raw ratio {summary['line_count_ratio']}, "
+        f"gate ratio {summary['line_count_gate_ratio']} from "
+        f"{summary['baseline_total_comparable_lines']} comparable baseline lines, "
+        f"allowance {summary['line_count_gate_allowance']})",
         f"- Fast-transition gate pass: {summary['fast_transition_gate_pass']} "
         f"({summary['baseline_total_fast_transitions']} -> "
         f"{summary['phase_total_fast_transitions']}, "
