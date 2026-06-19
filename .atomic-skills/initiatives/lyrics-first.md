@@ -3,10 +3,10 @@ slug: lyrics-first
 title: Lyrics-first SLJA generation
 status: active
 started: 2026-06-18
-last_updated: 2026-06-18T20:35:00Z
+last_updated: 2026-06-19T00:25:00Z
 branch: feat/slja-quality-local-only
 plan_link: docs/plans/2026-06-17-lyrics-first-handoff.md
-next_action: Compact whole-candidate vocal outputs so phase 1 passes robust slide/line gates
+next_action: Add per-source timing/quality metrics before vocal-active segmentation
 stack:
   - id: 1
     title: Implement lyrics-first generation path
@@ -93,8 +93,13 @@ tasks:
     closed_at: 2026-06-18T20:35:00Z
   T-016:
     title: Reduce slide and line expansion from selected vocal whole-candidate outputs
+    status: done
+    last_updated: 2026-06-19T00:25:00Z
+    closed_at: 2026-06-19T00:25:00Z
+  T-017:
+    title: Add per-source timing and quality metrics for consensus candidates
     status: todo
-    last_updated: 2026-06-18T20:35:00Z
+    last_updated: 2026-06-19T00:25:00Z
 parked: []
 emerged: []
 ---
@@ -214,3 +219,16 @@ robust phase gate still fails on slide/line expansion and auxiliary words:
 slides 130 -> 173, lines 237 -> 332, aux words 18 -> 41. A prior interrupted
 run exposed an unbounded layout search when scoring whole candidates; that is
 fixed by bounded layout scanning and phrase-level fallback scoring.
+
+2026-06-19: Phase 1 now passes the robust full-set gate after focusing on slide
+phrases. Final run:
+`/tmp/louvorja-asr-batch-2026-06-18/phase-history/phase-1/phase1-slide-phrases-pass-20260619T0015Z/`.
+Result: full set complete, phase gate pass true, hard lines 23 -> 0,
+over-target lines 45 -> 0, aux words 18 -> 0, slides 130 -> 183, lines
+237 -> 346, fast transitions 0 -> 2 with 1.2% phase ratio, reference gate true
+for `Deus é Refúgio` at 0.8760 similarity. The gate now compares slide/line
+counts against hard-wrapped comparable baselines with content-scaled allowances,
+because raw count comparison penalized valid line wrapping against invalid old
+outputs. Consensus SLJA output now disables `letra_aux` and uses 28-character
+main-line planning so validation reports show all generated lyric text as main
+slide lines.

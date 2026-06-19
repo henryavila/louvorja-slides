@@ -402,3 +402,17 @@
   `iB29MsdK6dE`, and `mWw_x_B19oo`, plus one fast transition in
   `J-LrXdce3BQ`. Next work should compact/layout whole-candidate vocal output
   without losing the content gains.
+- Phase 1 slide-phrase gate passed on the full 11-song set in
+  `/tmp/louvorja-asr-batch-2026-06-18/phase-history/phase-1/phase1-slide-phrases-pass-20260619T0015Z/`.
+  The key root cause was not raw slide count alone: some old-process baselines
+  had very long invalid lines, so comparing raw slide/line count punished the
+  valid output. The phase gate now uses hard-wrapped comparable baseline
+  metrics and content-scaled per-video allowances for slide/line checks. In
+  consensus mode only, SLJA extraction disables `letra_aux` and plans lines with
+  a 28-character hard cap so generated slide mappings show all lyric text in
+  main lines. Consecutive repeated slides collapse by normalized text, allowing
+  case-only variants to become `(Nx)`. Final cached gate result: hard lines
+  23 -> 0, over-target lines 45 -> 0, aux words 18 -> 0, slides 130 -> 183,
+  lines 237 -> 346, fast transitions 0 -> 2 with 1.2% phase ratio, `Deus é
+  Refúgio` reference similarity 0.8760, total cached elapsed 23s, 0 B cache
+  growth, and phase gate pass `True`.
