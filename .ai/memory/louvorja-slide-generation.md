@@ -416,3 +416,20 @@
   lines 237 -> 346, fast transitions 0 -> 2 with 1.2% phase ratio, `Deus é
   Refúgio` reference similarity 0.8760, total cached elapsed 23s, 0 B cache
   growth, and phase gate pass `True`.
+- On 2026-06-19 the `Deus é Refúgio` slide cadence review showed that the
+  28-character consensus hard cap and punctuation-driven cuts were too
+  aggressive for sung phrases. Titan reference behavior is gap-first: word
+  timestamp gaps/breath pauses are hard musical boundaries, while punctuation is
+  only a weak layout hint. `layout.py` now treats terminal punctuation, source
+  hints, and real pauses as hard segment boundaries; comma/semicolon/colon only
+  become lyric line boundaries after enough phrase content. Consensus SLJA
+  extraction uses the normal 34-character hard cap again, with 28 remaining the
+  target/penalty. New gate run
+  `/tmp/louvorja-asr-batch-2026-06-18/phase-history/phase-1/phase1-musical-phrasing-20260619T0100Z/`
+  processed all 11 videos in 48m49s, hard lines 23 -> 0, slides 130 -> 176,
+  lines 237 -> 338, aux words 18 -> 0. It fails phase gate because
+  `-cFY8RAHkpc` reference similarity is 0.736 (the selector chose
+  `medium-vocals`, causing transcription errors) and per-video over-target
+  ratios exceed 30% for `SpWZF8jdfCA` and `-cFY8RAHkpc`. The cadence for the
+  first `Deus é Refúgio` refrains is improved, but transcription selection still
+  needs separate work.
