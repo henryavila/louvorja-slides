@@ -133,6 +133,78 @@ class SlideLayoutRulesTest(unittest.TestCase):
         self.assertEqual(len(slides), 1)
         self.assertEqual(slides[0].lines, ("E tudo vai ficar bem", "tudo acaba bem No final no final"))
 
+    def test_commas_without_breath_pause_do_not_force_slide_breaks(self) -> None:
+        config = LayoutConfig(
+            target_max_chars_per_line=28,
+            hard_max_chars_per_line=34,
+            allow_auxiliary=False,
+        )
+        words = words_from_text(
+            (
+                "Fonte traz calma, ela traz paz, e um abrigo no temporal. "
+                "Ela e escudo, e consolador, Fonte e refugio na provacao."
+            ),
+            gap_after={10: 1.2},
+        )
+
+        slides = plan_lyric_slides(words, config=config)
+
+        self.assertEqual(
+            [slide.lines for slide in slides],
+            [
+                ("Fonte traz calma, ela traz paz,", "e um abrigo no temporal."),
+                ("Ela e escudo, e consolador,", "Fonte e refugio na provacao."),
+            ],
+        )
+
+    def test_complete_musical_phrase_pair_is_not_crossed_to_fill_slide(self) -> None:
+        config = LayoutConfig(
+            target_max_chars_per_line=28,
+            hard_max_chars_per_line=34,
+            allow_auxiliary=False,
+        )
+        words = words_from_text(
+            (
+                "Primeira frase anterior. Segunda frase anterior. "
+                "Fonte traz calma, ela traz paz, e um abrigo no temporal. "
+                "Ela e escudo, e consolador, Fonte e refugio na provacao."
+            )
+        )
+
+        slides = plan_lyric_slides(words, config=config)
+
+        self.assertEqual(
+            [slide.lines for slide in slides],
+            [
+                ("Primeira frase anterior.", "Segunda frase anterior."),
+                ("Fonte traz calma, ela traz paz,", "e um abrigo no temporal."),
+                ("Ela e escudo, e consolador,", "Fonte e refugio na provacao."),
+            ],
+        )
+
+    def test_soft_punctuation_can_end_complete_two_line_phrase_slide(self) -> None:
+        config = LayoutConfig(
+            target_max_chars_per_line=28,
+            hard_max_chars_per_line=34,
+            allow_auxiliary=False,
+        )
+        words = words_from_text(
+            (
+                "Fonte traz calma, ela traz paz, e um abrigo no temporal, "
+                "Ela e escudo, e consolador, Fonte e refugio na provacao."
+            )
+        )
+
+        slides = plan_lyric_slides(words, config=config)
+
+        self.assertEqual(
+            [slide.lines for slide in slides],
+            [
+                ("Fonte traz calma, ela traz paz,", "e um abrigo no temporal,"),
+                ("Ela e escudo, e consolador,", "Fonte e refugio na provacao."),
+            ],
+        )
+
     def test_creates_new_slide_when_pause_is_long_enough(self) -> None:
         words = words_from_text(
             "E tudo vai ficar bem tudo acaba bem No final no final",

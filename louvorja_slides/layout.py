@@ -199,7 +199,7 @@ def _longest_layout(
         elif (
             has_musical_boundaries
             and end < len(words) - 1
-            and not _musical_boundary_after(words, end, cfg)
+            and not _lyric_line_boundary_after(words, end, cfg)
         ):
             continue
         candidate = _layout_segment(segment, cfg)
@@ -222,7 +222,7 @@ def _longest_layout(
         duration_ok = [
             item
             for item in candidates
-            if _duration_ok(words, start, item[0], cfg)
+            if _duration_ok(words, start, item[0], item[1], cfg)
         ]
         candidates = duration_ok or candidates
         best_bucket = min(
@@ -277,7 +277,14 @@ def _candidate_bucket(
         line_bucket = 0
     else:
         line_bucket = 1
-    boundary_bucket = 0 if _is_natural_segment_end(words, start, end, cfg) else 2
+    if _is_complete_phrase_slide(words, start, end, candidate, cfg):
+        boundary_bucket = 0
+    elif _is_natural_segment_end(words, start, end, cfg):
+        boundary_bucket = 0
+    elif end < len(words) - 1 and _lyric_line_boundary_after(words, end, cfg):
+        boundary_bucket = 1
+    else:
+        boundary_bucket = 2
     return boundary_bucket + line_bucket
 
 
@@ -291,7 +298,7 @@ def _is_natural_segment_end(
         return True
     if _source_boundary_after(words, end):
         return True
-    if _ends_sentence(words[end].text):
+    if _ends_terminal_phrase(words[end].text):
         return True
     if words[end + 1].start - words[end].end >= cfg.phrase_pause_seconds:
         return True
@@ -300,12 +307,62 @@ def _is_natural_segment_end(
     return words[end].end - words[start].start >= cfg.min_slide_duration * 2
 
 
-def _duration_ok(words: list[LyricWord], start: int, end: int, cfg: LayoutConfig) -> bool:
+def _duration_ok(
+    words: list[LyricWord],
+    start: int,
+    end: int,
+    candidate: _LayoutCandidate,
+    cfg: LayoutConfig,
+) -> bool:
     if end == len(words) - 1:
         return True
     current_duration = words[end].end - words[start].start
     tail_duration = words[-1].end - words[end + 1].start
+    if (
+        tail_duration >= cfg.min_slide_duration
+        and _is_complete_phrase_slide(words, start, end, candidate, cfg)
+    ):
+        return True
     return current_duration >= cfg.min_slide_duration and tail_duration >= cfg.min_slide_duration
+
+
+def _is_complete_phrase_slide(
+    words: list[LyricWord],
+    start: int,
+    end: int,
+    candidate: _LayoutCandidate,
+    cfg: LayoutConfig,
+) -> bool:
+    if candidate.aux_text or len(candidate.lines) < 2:
+        return False
+    if any(len(line) > cfg.hard_max_chars_per_line for line in candidate.lines):
+        return False
+    is_segment_end = _is_natural_segment_end(words, start, end, cfg)
+    if not is_segment_end and (
+        end >= len(words) - 1 or not _lyric_line_boundary_after(words, end, cfg)
+    ):
+        return False
+    return _candidate_uses_natural_line_breaks(words, start, candidate, cfg)
+
+
+def _candidate_uses_natural_line_breaks(
+    words: list[LyricWord],
+    start: int,
+    candidate: _LayoutCandidate,
+    cfg: LayoutConfig,
+) -> bool:
+    next_start = start
+    for line in candidate.lines[:-1]:
+        word_count = len(line.split())
+        if word_count <= 0:
+            return False
+        boundary_index = next_start + word_count - 1
+        if boundary_index >= len(words) - 1:
+            return False
+        if not _lyric_line_boundary_after(words, boundary_index, cfg):
+            return False
+        next_start = boundary_index + 1
+    return True
 
 
 def _layout_segment(words: list[LyricWord], cfg: LayoutConfig) -> _LayoutCandidate | None:
@@ -470,7 +527,7 @@ def _overlong_layout(words: list[LyricWord], cfg: LayoutConfig) -> _LayoutCandid
 def _natural_split_indices(words: list[LyricWord], cfg: LayoutConfig) -> list[int]:
     result: list[int] = []
     for index in range(0, len(words) - 1):
-        if _musical_boundary_after(words, index, cfg):
+        if _lyric_line_boundary_after(words, index, cfg):
             result.append(index)
     return result
 
@@ -493,9 +550,19 @@ def _musical_boundary_after(
 ) -> bool:
     if _source_boundary_after(words, index):
         return True
-    if _ends_sentence(words[index].text):
+    if _ends_terminal_phrase(words[index].text):
         return True
     return words[index + 1].start - words[index].end >= cfg.phrase_pause_seconds
+
+
+def _lyric_line_boundary_after(
+    words: list[LyricWord],
+    index: int,
+    cfg: LayoutConfig,
+) -> bool:
+    if _musical_boundary_after(words, index, cfg):
+        return True
+    return _soft_phrase_boundary_after(words, index, cfg)
 
 
 def _slide_from_candidate(words: list[LyricWord], candidate: _LayoutCandidate) -> SlidePlan:
@@ -520,7 +587,7 @@ def _split_score(first: list[LyricWord], second: list[LyricWord], cfg: LayoutCon
         score -= 10.0
     elif _line_boundary_between(first[-1], second[0]):
         score -= 7.0
-    if _ends_sentence(first[-1].text):
+    if _is_soft_phrase_boundary_for_line(first, cfg):
         score -= 8.0
     elif second[0].start - first[-1].end >= cfg.phrase_pause_seconds:
         score -= 6.0
@@ -541,8 +608,50 @@ def _is_weak_break_word(text: str, cfg: LayoutConfig) -> bool:
     return _normalize_word(text) in cfg.weak_break_words
 
 
-def _ends_sentence(text: str) -> bool:
-    return text.rstrip().endswith((".", ",", ";", ":", "!", "?", "..."))
+def _ends_terminal_phrase(text: str) -> bool:
+    return text.rstrip().endswith((".", "!", "?", "..."))
+
+
+def _ends_nonterminal_phrase(text: str) -> bool:
+    return text.rstrip().endswith((",", ";", ":"))
+
+
+def _soft_phrase_boundary_after(
+    words: list[LyricWord],
+    index: int,
+    cfg: LayoutConfig,
+) -> bool:
+    if not _ends_nonterminal_phrase(words[index].text):
+        return False
+
+    run_words: list[LyricWord] = []
+    current_run: list[LyricWord] = []
+    for cursor in range(0, index + 1):
+        current_run.append(words[cursor])
+        if _musical_boundary_after(words, cursor, cfg):
+            current_run = []
+        elif _ends_nonterminal_phrase(words[cursor].text) and _is_soft_phrase_run_boundary(
+            current_run,
+            cfg,
+        ):
+            run_words = current_run
+            current_run = []
+
+    return bool(run_words) and run_words[-1] is words[index]
+
+
+def _is_soft_phrase_boundary_for_line(words: list[LyricWord], cfg: LayoutConfig) -> bool:
+    if not words:
+        return False
+    if _ends_terminal_phrase(words[-1].text):
+        return True
+    if not _ends_nonterminal_phrase(words[-1].text):
+        return False
+    return _is_soft_phrase_run_boundary(words, cfg)
+
+
+def _is_soft_phrase_run_boundary(words: list[LyricWord], cfg: LayoutConfig) -> bool:
+    return len(words) >= 5 or len(_join(words)) >= cfg.target_max_chars_per_line
 
 
 def _source_boundary_after(words: list[LyricWord], index: int) -> bool:

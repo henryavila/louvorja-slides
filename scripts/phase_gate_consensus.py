@@ -1351,10 +1351,16 @@ def _phase_gate_failures(
             f"(limit {thresholds.max_phase_aux_word_ratio:.1%})"
         )
     if not target_line_gate_pass:
+        total_status = (
+            "exceeds"
+            if phase_over_target_ratio > thresholds.max_phase_over_target_line_ratio
+            else "is within"
+        )
         failures.append(
             "over-target line ratio gate failed: "
-            f"total phase ratio {phase_over_target_ratio:.1%}, "
-            f"limit {thresholds.max_phase_over_target_line_ratio:.1%}"
+            f"total phase ratio {phase_over_target_ratio:.1%} {total_status} "
+            f"limit {thresholds.max_phase_over_target_line_ratio:.1%}; "
+            "one or more videos may still exceed the per-video limit"
         )
         failures.extend(_top_target_line_failures(complete, thresholds))
     if not reference_lyrics_gate_pass:
