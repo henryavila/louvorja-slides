@@ -91,6 +91,25 @@ class QualityAnalysisTest(unittest.TestCase):
         with self.assertRaisesRegex(QualityViolation, "no lyric slides"):
             enforce_quality(slides=[], mode="fail")
 
+    def test_slide_quality_flags_empty_hard_limit_and_fast_transitions(self) -> None:
+        slides = [
+            Slide(lines=("Linha normal",), start_seconds=0.0),
+            Slide(lines=(), start_seconds=2.0),
+            Slide(lines=("Declarado guerra contra o enganador",), start_seconds=4.0),
+            Slide(lines=("Outra linha normal",), start_seconds=9.0),
+        ]
+
+        report = analyze_slide_quality(slides)
+
+        self.assertFalse(report.acceptable)
+        messages = "\n".join(report.messages)
+        self.assertIn("empty lyric slide count", messages)
+        self.assertIn("main lines over hard limit", messages)
+        self.assertIn("fast slide transition ratio", messages)
+        self.assertEqual(report.empty_slide_count, 1)
+        self.assertEqual(report.over_hard_line_count, 1)
+        self.assertEqual(report.fast_transition_count, 2)
+
     def test_positive_gap_threshold_is_configurable(self) -> None:
         transcript = Transcript(
             words=[

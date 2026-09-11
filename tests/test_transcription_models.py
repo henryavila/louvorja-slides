@@ -168,6 +168,28 @@ class LocalWhisperTest(unittest.TestCase):
 
         self.assertEqual([word.text for word in transcript.words], ["Santo"])
 
+    def test_transcriber_filters_punctuation_only_music_tokens(self) -> None:
+        class FakeModel:
+            def transcribe(
+                self, samples: np.ndarray, **kwargs: object
+            ) -> list[SimpleNamespace]:
+                return [
+                    SimpleNamespace(t0=0, t1=100, text="♪"),
+                    SimpleNamespace(t0=100, t1=200, text="Fala"),
+                    SimpleNamespace(t0=200, t1=300, text="?"),
+                ]
+
+        transcriber = LocalWhisperTranscriber(model=FakeModel(), model_id="large-v3")
+
+        transcript = transcriber.transcribe_samples(
+            samples=np.zeros(16000, dtype=np.float32),
+            sample_rate=16000,
+            duration_seconds=3.0,
+            language="pt",
+        )
+
+        self.assertEqual([word.text for word in transcript.words], ["Fala"])
+
 
 if __name__ == "__main__":
     unittest.main()

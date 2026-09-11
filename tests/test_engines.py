@@ -1,26 +1,26 @@
 from __future__ import annotations
 
+import sys
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType
 from unittest.mock import patch
 
 from louvorja_slides.engines import (
     AudioToDocumentConfig,
-    LocalLinuxEngine,
-    MacTitanEngine,
+    LocalEngine,
     select_engine,
 )
 from louvorja_slides.transcription import Transcript, TranscribedWord
 
 
 class EngineSelectionTest(unittest.TestCase):
-    def test_select_engine_uses_mac_titan_on_darwin(self) -> None:
+    def test_select_engine_uses_local_on_darwin(self) -> None:
         engine = select_engine("auto", platform_system="Darwin", platform_release="23.0")
 
-        self.assertIsInstance(engine, MacTitanEngine)
+        self.assertIsInstance(engine, LocalEngine)
 
-    def test_select_engine_uses_local_linux_on_linux_and_wsl(self) -> None:
+    def test_select_engine_uses_local_on_linux_and_wsl(self) -> None:
         linux = select_engine("auto", platform_system="Linux", platform_release="6.8.0")
         wsl = select_engine(
             "auto",
@@ -28,18 +28,18 @@ class EngineSelectionTest(unittest.TestCase):
             platform_release="5.15.153.1-microsoft-standard-WSL2",
         )
 
-        self.assertIsInstance(linux, LocalLinuxEngine)
-        self.assertIsInstance(wsl, LocalLinuxEngine)
+        self.assertIsInstance(linux, LocalEngine)
+        self.assertIsInstance(wsl, LocalEngine)
 
     def test_select_engine_accepts_explicit_overrides(self) -> None:
         self.assertIsInstance(
-            select_engine("titan", platform_system="Linux", platform_release="6.8.0"),
-            MacTitanEngine,
-        )
-        self.assertIsInstance(
             select_engine("local", platform_system="Darwin", platform_release="23.0"),
-            LocalLinuxEngine,
+            LocalEngine,
         )
+
+    def test_select_engine_rejects_titan_runtime_dependency(self) -> None:
+        with self.assertRaisesRegex(ValueError, "reference-only"):
+            select_engine("titan", platform_system="Darwin", platform_release="23.0")
 
 
 class EngineContractTest(unittest.TestCase):
@@ -58,7 +58,7 @@ class EngineContractTest(unittest.TestCase):
             calls.append((audio_path, config))
             return transcript
 
-        engine = LocalLinuxEngine(transcribe_fn=fake_transcribe)
+        engine = LocalEngine(transcribe_fn=fake_transcribe)
         audio = Path("song.mp3")
 
         doc = engine.transcribe(audio, AudioToDocumentConfig(title="Minha musica"))
@@ -72,19 +72,10 @@ class EngineContractTest(unittest.TestCase):
         def fake_transcribe(audio_path: Path, config: AudioToDocumentConfig) -> Transcript:
             raise AssertionError("the local engine must reject mock before transcribing")
 
-        engine = LocalLinuxEngine(transcribe_fn=fake_transcribe)
+        engine = LocalEngine(transcribe_fn=fake_transcribe)
 
         with self.assertRaisesRegex(ValueError, "mock"):
             engine.transcribe(Path("song.mp3"), AudioToDocumentConfig(force_mock=True))
-
-    def test_local_engine_rejects_mps_device(self) -> None:
-        def fake_transcribe(audio_path: Path, config: AudioToDocumentConfig) -> Transcript:
-            raise AssertionError("the local engine must reject mps before transcribing")
-
-        engine = LocalLinuxEngine(transcribe_fn=fake_transcribe)
-
-        with self.assertRaisesRegex(ValueError, "mps"):
-            engine.transcribe(Path("song.mp3"), AudioToDocumentConfig(backend="mps"))
 
     def test_local_engine_forwards_backend_device_to_pipeline(self) -> None:
         transcript = Transcript(
@@ -92,49 +83,30 @@ class EngineContractTest(unittest.TestCase):
             detected_language="pt",
             duration_seconds=5.0,
         )
+        calls: list[object] = []
 
-        with patch(
-            "louvorja_slides.local_pipeline.transcribe_audio_local",
-            return_value=transcript,
-        ) as transcribe_mock:
-            LocalLinuxEngine().transcribe(
+        class FakeLocalPipelineConfig:
+            def __init__(self, **kwargs: object) -> None:
+                self.__dict__.update(kwargs)
+
+        def fake_transcribe_audio_local(
+            audio_path: Path, *, config: object
+        ) -> Transcript:
+            calls.append(config)
+            return transcript
+
+        fake_module = ModuleType("louvorja_slides.local_pipeline")
+        fake_module.LocalPipelineConfig = FakeLocalPipelineConfig
+        fake_module.transcribe_audio_local = fake_transcribe_audio_local
+
+        with patch.dict(sys.modules, {"louvorja_slides.local_pipeline": fake_module}):
+            LocalEngine().transcribe(
                 Path("song.mp3"),
-                AudioToDocumentConfig(backend="cuda"),
+                AudioToDocumentConfig(backend="mps"),
             )
 
-        pipeline_config = transcribe_mock.call_args.kwargs["config"]
-        self.assertEqual(pipeline_config.device, "cuda")
-
-    def test_mac_engine_delegates_to_titan_transcribe(self) -> None:
-        doc = SimpleNamespace(metadata=SimpleNamespace(title="Titan"), sections=[])
-        calls: list[tuple[Path, dict[str, object]]] = []
-
-        def fake_titan(audio_path: Path, **kwargs: object) -> SimpleNamespace:
-            calls.append((audio_path, kwargs))
-            return doc
-
-        engine = MacTitanEngine(transcribe_fn=fake_titan)
-        config = AudioToDocumentConfig(
-            language="pt",
-            cache=False,
-            force_mock=True,
-            backend="mps",
-            whisper_model="medium",
-        )
-
-        result = engine.transcribe(Path("song.mp3"), config)
-
-        self.assertIs(result, doc)
-        self.assertEqual(
-            calls[0][1],
-            {
-                "language": "pt",
-                "cache": False,
-                "force_mock": True,
-                "backend": "mps",
-                "transcription_model_id": "medium",
-            },
-        )
+        pipeline_config = calls[0]
+        self.assertEqual(pipeline_config.device, "mps")
 
 
 if __name__ == "__main__":

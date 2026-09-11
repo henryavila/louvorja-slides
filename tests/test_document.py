@@ -37,6 +37,46 @@ class DocumentTest(unittest.TestCase):
 
         self.assertEqual(doc.sections[0].lines[0].text, "Santo")
 
+    def test_transcript_to_document_filters_non_lyric_music_tokens(self) -> None:
+        transcript = Transcript(
+            words=[
+                TranscribedWord("♪", 0.0, 10.0),
+                TranscribedWord("Fala", 10.0, 10.5),
+                TranscribedWord("?", 10.5, 11.0),
+                TranscribedWord("comigo", 11.0, 11.5),
+            ],
+            detected_language="pt",
+            duration_seconds=12.0,
+        )
+
+        doc = transcript_to_document(transcript)
+
+        self.assertEqual(doc.sections[0].lines[0].text, "Fala comigo")
+
+    def test_transcript_to_document_breaks_likely_musical_phrases(self) -> None:
+        transcript = Transcript(
+            words=[
+                TranscribedWord("Andei", 1.0, 1.5),
+                TranscribedWord("tão", 1.5, 2.0),
+                TranscribedWord("cego,", 2.0, 2.5),
+                TranscribedWord("sem", 2.5, 3.0),
+                TranscribedWord("rumo", 3.0, 3.5),
+                TranscribedWord("certo", 3.5, 4.0),
+                TranscribedWord("Buscando", 4.0, 4.5),
+                TranscribedWord("a", 4.5, 5.0),
+                TranscribedWord("paz", 5.0, 5.5),
+            ],
+            detected_language="pt",
+            duration_seconds=6.0,
+        )
+
+        doc = transcript_to_document(transcript)
+
+        self.assertEqual(
+            [line.text for line in doc.sections[0].lines],
+            ["Andei tão cego, sem rumo certo", "Buscando a paz"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
